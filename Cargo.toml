@@ -1,0 +1,42 @@
+[package]
+name = "ipro-talk"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+
+# Web Framework
+poem = { version = "3.0", features = ["rustls", "sse", "static-files", "anyhow", "cookie", "tempfile"] }
+poem-openapi = { version = "5.0", features = ["swagger-ui", "chrono", "uuid"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database (Relational)
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"] }
+
+# Database (KV / Encrypted Store)
+sled = "0.34"
+
+# Utilities
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+dotenvy = "0.15"
+time = { version = "=0.3.36", features = ["serde"] }
+
+# Crypto (for potential future use, though client handles most E2EE)
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.21"
+bcrypt = "0.15"
+jsonwebtoken = "9.2"
+futures-util = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }

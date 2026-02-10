@@ -1,0 +1,9 @@
+/target
+/msg_db
+**/*.rs.bk
+Cargo.lock
+# IDEs
+.idea
+.vscode
+.DS_Store
+*.log
