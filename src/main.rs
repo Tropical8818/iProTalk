@@ -39,6 +39,7 @@ async fn main() -> Result<(), std::io::Error> {
     let cors = poem::middleware::Cors::new();
 
     let app = Route::new()
+        .at("/", poem::endpoint::StaticFilesEndpoint::new("static").index_file("index.html"))
         .at("/api/messages/events", poem::get(api::messages::sse_handler))
         .nest("/api", api_service)
         .nest("/docs", ui)

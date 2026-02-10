@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y libssl3 ca-certificates curl && rm -rf 
 
 # Copy the binary from the builder
 COPY --from=builder /usr/src/app/target/release/ipro-talk /app/ipro-talk
+COPY --from=builder /usr/src/app/static /app/static
 
 # Create directories for persistence
 RUN mkdir -p /app/data /app/msg_db
