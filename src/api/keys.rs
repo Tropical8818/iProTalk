@@ -1,5 +1,5 @@
-use poem::{web::Data, Result, handler, error::{InternalServerError}};
-use poem_openapi::{OpenApi, payload::Json, param::{Path, Header}, ApiResponse};
+use poem::{web::Data, Result, error::InternalServerError};
+use poem_openapi::{OpenApi, payload::Json, param::{Path, Header}};
 use crate::{db::AppState, models::{UserKeyRequest, UserKeyResponse}};
 use sqlx::Row;
 
@@ -76,7 +76,7 @@ fn decode_user_id_from_token(token: &str) -> anyhow::Result<String> {
         sub: String,
     }
 
-    let secret = "secret_key";
+    let secret = std::env::var("SECRET_KEY").unwrap_or_else(|_| "secret_key".to_string());
     let token_data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_ref()),

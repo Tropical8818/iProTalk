@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  ipro-talk:
+    build: .
+    ports:
+      - "3333:3000"
+    volumes:
+      - ./data:/app/data
+      - ./msg_db:/app/msg_db
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-change_me_in_production}
+      - DATABASE_URL=sqlite::memory:
+      - MSG_DB_PATH=msg_db
+      - RUST_LOG=poem=info,ipro_talk=info
+    restart: unless-stopped

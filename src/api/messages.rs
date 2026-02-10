@@ -15,7 +15,7 @@ impl MessagesApi {
     async fn send_group_message(
         &self,
         state: Data<&AppState>,
-        gid: Path<String>,
+        _gid: Path<String>,
         req: Json<MessagePayload>,
         #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
     ) -> Result<Json<String>> {

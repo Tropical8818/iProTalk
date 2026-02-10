@@ -1,4 +1,4 @@
-use poem::{web::Data, Result, handler, error::{BadRequest, InternalServerError}};
+use poem::{web::Data, Result, error::InternalServerError};
 use poem_openapi::{OpenApi, payload::Json};
 use crate::{db::AppState, models::{RegisterRequest, LoginRequest, AuthResponse}};
 use uuid::Uuid;
@@ -103,8 +103,8 @@ fn create_token(user_id: &str) -> Result<String> {
         exp: expiration as usize,
     };
     
-    // In production, use env var for secret
-    let secret = "secret_key"; 
+    // Use env var for secret
+    let secret = std::env::var("SECRET_KEY").unwrap_or_else(|_| "secret_key".to_string()); 
     encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_ref()))
         .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))
 }
