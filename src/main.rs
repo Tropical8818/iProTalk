@@ -31,7 +31,7 @@ async fn main() -> Result<(), std::io::Error> {
         "iProTalk API",
         "0.1.0",
     )
-    .server("http://localhost:3333/api");
+    .server("http://localhost:3000/api");
 
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();

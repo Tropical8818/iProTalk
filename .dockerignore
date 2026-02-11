@@ -1,0 +1,9 @@
+target
+node_modules
+web-client/node_modules
+web-client/dist
+.git
+data
+msg_db
+*.log
+.gemini

@@ -1,14 +1,25 @@
 services:
-  ipro-talk:
+  ipro-talk-backend:
     build: .
-    ports:
-      - "3333:3000"
     volumes:
       - ./data:/app/data
       - ./msg_db:/app/msg_db
     environment:
       - "SECRET_KEY=${SECRET_KEY:-change_me_in_production}"
-      - "DATABASE_URL=sqlite::memory:"
+      - "DATABASE_URL=sqlite:///app/data/iprotalk.db?mode=rwc"
       - "MSG_DB_PATH=msg_db"
       - "RUST_LOG=poem=info,ipro_talk=info"
+    restart: unless-stopped
+
+  ipro-talk-frontend:
+    build:
+      context: ./web-client
+      args:
+        - VITE_API_URL=/api
+    ports:
+      - "8080:80"
+    environment:
+      - "VITE_API_URL=/api"
+    depends_on:
+      - ipro-talk-backend
     restart: unless-stopped
