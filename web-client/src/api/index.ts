@@ -78,11 +78,22 @@ export const messageApi = {
         api.get<StoredMessage[]>(`/messages/dm/${uid}/history`, { params: { limit } }),
 
     deleteMessage: (mid: string) => api.delete(`/messages/${mid}`),
+
+    markRead: (messageId: string) => api.post(`/messages/${messageId}/read`),
+}
+
+export const reactionApi = {
+    addReaction: (messageId: string, emoji: string) =>
+        api.post(`/messages/${messageId}/reaction`, { emoji }),
+    removeReaction: (messageId: string, emoji: string) =>
+        api.delete(`/messages/${messageId}/reaction`, { data: { emoji } }),
 }
 
 export const usersApi = {
     getAllUsers: () => api.get<Array<{ user_id: string; name: string; email?: string; public_key: string | null; is_admin?: boolean }>>('/users'),
     searchUsers: (q: string) => api.get<Array<{ user_id: string; name: string; email?: string; public_key: string | null }>>('/users/search', { params: { q } }),
+    updateMe: (data: { name?: string }) => api.put('/users/me', data),
+    changePassword: (data: { old_password: string; new_password: string }) => api.put('/users/me/password', data),
 }
 
 export const keyApi = {

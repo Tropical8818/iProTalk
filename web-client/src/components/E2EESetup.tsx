@@ -39,7 +39,7 @@ export default function E2EESetup() {
             localStorage.setItem("e2ee_public_key", b64PublicKey);
 
             // 4. Upload public key to API
-            if (!token) throw new Error("Not authenticated. Please log in again.");
+            if (!token) throw new Error("未登录，请重新登录。");
             const res = await fetch("/api/users/keys", {
                 method: "POST",
                 headers: {
@@ -51,7 +51,7 @@ export default function E2EESetup() {
 
             if (!res.ok) {
                 const errText = await res.text().catch(() => `HTTP ${res.status}`);
-                throw new Error(`Failed to upload keys (${res.status}): ${errText}`);
+                throw new Error(`上传密钥失败 (${res.status}): ${errText}`);
             }
 
             setSuccess(true);
@@ -62,9 +62,9 @@ export default function E2EESetup() {
 
         } catch (err: unknown) {
             if (err instanceof Error) {
-                setError(err.message || "An unexpected error occurred.");
+                setError(err.message || "发生了意外错误，请重试。");
             } else {
-                setError("An unexpected error occurred.");
+                setError("发生了意外错误，请重试。");
             }
         } finally {
             setLoading(false);
@@ -86,11 +86,11 @@ export default function E2EESetup() {
                 </div>
 
                 <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600 mb-2 text-center">
-                    {success ? "Encryption Secured" : "Secure Your Chats"}
+                    {success ? "加密已就绪" : "加密您的聊天"}
                 </h2>
 
                 <p className="text-slate-600 dark:text-slate-300 text-center mb-8 font-medium">
-                    iProTalk uses <b>End-to-End Encryption</b> to keep your messages private. Only you and the people you message can read them.
+                    iProTalk 使用<b>端对端加密</b>保护您的消息安全。只有您和您的通话对象才能读取消息内容。
                 </p>
 
                 {error && (
@@ -109,17 +109,17 @@ export default function E2EESetup() {
                                 : "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-md hover:shadow-lg disabled:opacity-70 disabled:cursor-not-allowed"}`}
                     >
                         {loading ? (
-                            <><Loader2 className="w-5 h-5 animate-spin" /> Generating Keys...</>
+                            <><Loader2 className="w-5 h-5 animate-spin" /> 正在生成密钥...</>
                         ) : success ? (
-                            <><ShieldCheck className="w-5 h-5" /> Secured</>
+                            <><ShieldCheck className="w-5 h-5" /> 已加密</>
                         ) : (
-                            <><KeyRound className="w-5 h-5" /> Initialize E2EE Keys</>
+                            <><KeyRound className="w-5 h-5" /> 初始化加密密钥</>
                         )}
                     </button>
                 </div>
 
                 <p className="text-xs text-center text-slate-500 mt-6 mt-4">
-                    Your private keys never leave your device.
+                    您的私钥永远不会离开您的设备。
                 </p>
             </div>
         </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Hash, Users, MessageSquare, KeyRound, Settings, Paperclip, Plus, Search, Trash2, ChevronDown } from 'lucide-react'
-import { messageApi, subscribeToEvents, keyApi, usersApi, type StoredMessage } from '../api'
+import { Send, Hash, Users, MessageSquare, KeyRound, Settings, Paperclip, Plus, Search, Trash2, Reply, Smile, X } from 'lucide-react'
+import { messageApi, reactionApi, subscribeToEvents, keyApi, usersApi, type StoredMessage } from '../api'
 import {
     generateKeyPair, exportPrivateKey, exportPublicKey,
     importPrivateKey, importPublicKey, deriveSharedSecret,
@@ -13,6 +13,11 @@ import { RootState } from '../store'
 import { useUploadFileChunkMutation, usePrepareFileMutation } from '../store/api/filesApi'
 import UserSettingsModal from './UserSettingsModal'
 import UserSearchModal from './UserSearchModal'
+import EmojiPicker from './EmojiPicker'
+import MessageReaction, { type Reaction } from './MessageReaction'
+import ImagePreview from './ImagePreview'
+import MessageReply, { type ReplyInfo } from './MessageReply'
+import { useInView } from '../lib/useInView'
 
 // ===== 类型 =====
 interface Message {
@@ -24,11 +29,38 @@ interface Message {
     time: string
     isMe: boolean
     isDecrypted: boolean
+    replyTo?: ReplyInfo
 }
 
 type ViewKey = { type: 'channel'; id: string } | { type: 'dm'; uid: string; name: string }
 
 interface UserInfo { name: string; publicKey: string }
+
+// FILE message helper
+const FILE_PATTERN = /^\[FILE:(.*?)\]\((.*?)\)$/
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp', 'image/svg+xml']
+
+function isImageUrl(url: string): boolean {
+    const lower = url.toLowerCase()
+    return IMAGE_TYPES.some(t => lower.includes(t.split('/')[1])) ||
+        /\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(lower)
+}
+
+// Individual message wrapper to track read state via IntersectionObserver
+function MessageReadWrapper({
+    msgId,
+    isMe,
+    onVisible,
+    children,
+}: {
+    msgId: string
+    isMe: boolean
+    onVisible: (id: string) => void
+    children: React.ReactNode
+}) {
+    const ref = useInView(useCallback(() => { if (!isMe) onVisible(msgId) }, [msgId, isMe, onVisible]))
+    return <div ref={ref}>{children}</div>
+}
 
 // ===== 主组件 =====
 export const Chat = () => {
@@ -45,6 +77,12 @@ export const Chat = () => {
     const [showSettings, setShowSettings] = useState(false)
     const [showSearch, setShowSearch] = useState(false)
     const [hoveredMsg, setHoveredMsg] = useState<string | null>(null)
+
+    // --- 新增状态 ---
+    const [emojiPickerFor, setEmojiPickerFor] = useState<string | null>(null)
+    const [reactions, setReactions] = useState<Map<string, Reaction[]>>(new Map())
+    const [readMap, setReadMap] = useState<Map<string, boolean>>(new Map())
+    const [replyTo, setReplyTo] = useState<ReplyInfo | null>(null)
 
     const scrollRef = useRef<HTMLDivElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
@@ -243,9 +281,13 @@ export const Chat = () => {
         e.preventDefault()
         if (!input.trim() || loading || keysStatus !== 'ready') return
         setLoading(true)
+        const textToSend = replyTo
+            ? `[回复 ${replyTo.sender}]: ${input.trim()}`
+            : input.trim()
         try {
-            await encryptAndSend(input.trim(), currentView)
+            await encryptAndSend(textToSend, currentView)
             setInput('')
+            setReplyTo(null)
         } catch (err) {
             console.error('发送消息失败', err)
         } finally {
@@ -283,6 +325,49 @@ export const Chat = () => {
             setMessages(prev => prev.filter(m => m.id !== msgId))
         } catch { alert('删除失败') }
     }
+
+    const handleToggleReaction = async (msgId: string, emoji: string) => {
+        if (!user) return
+        setReactions(prev => {
+            const next = new Map(prev)
+            const list = next.get(msgId) ?? []
+            const existing = list.find(r => r.emoji === emoji)
+            if (existing) {
+                if (existing.isMine) {
+                    const updated = list.map(r => r.emoji === emoji ? { ...r, count: r.count - 1, isMine: false } : r).filter(r => r.count > 0)
+                    next.set(msgId, updated)
+                } else {
+                    next.set(msgId, list.map(r => r.emoji === emoji ? { ...r, count: r.count + 1, isMine: true } : r))
+                }
+            } else {
+                next.set(msgId, [...list, { emoji, count: 1, isMine: true }])
+            }
+            return next
+        })
+        // Fire-and-forget API call; ignore errors silently for optimistic UX
+        const myReaction = (reactions.get(msgId) ?? []).find(r => r.emoji === emoji)
+        if (myReaction?.isMine) {
+            reactionApi.removeReaction(msgId, emoji).catch(() => {})
+        } else {
+            reactionApi.addReaction(msgId, emoji).catch(() => {})
+        }
+    }
+
+    const handleAddEmoji = (msgId: string, emoji: string) => {
+        handleToggleReaction(msgId, emoji)
+        setEmojiPickerFor(null)
+    }
+
+    const handleMarkRead = useCallback((msgId: string) => {
+        setReadMap(prev => {
+            if (prev.get(msgId)) return prev
+            const next = new Map(prev)
+            next.set(msgId, true)
+            return next
+        })
+        // Best-effort API call
+        messageApi.markRead(msgId).catch(() => {})
+    }, [])
 
     const openDM = (uid: string, name: string) => {
         setCurrentView({ type: 'dm', uid, name })
@@ -447,94 +532,162 @@ export const Chat = () => {
                     {messages.map((msg, idx) => {
                         const prevMsg = messages[idx - 1]
                         const showHeader = !prevMsg || prevMsg.senderId !== msg.senderId ||
-                            (msg.timestamp - prevMsg.timestamp) > 300 // 5分钟间隔重新显示头像
+                            (msg.timestamp - prevMsg.timestamp) > 300
                         const isHovered = hoveredMsg === msg.id
+                        const msgReactions = reactions.get(msg.id) ?? []
+                        const fileMatch = msg.text.match(FILE_PATTERN)
+                        const isRead = readMap.get(msg.id) ?? false
 
                         return (
-                            <motion.div
+                            <MessageReadWrapper
                                 key={msg.id}
-                                initial={{ opacity: 0, y: 8 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                className={`group relative flex items-start gap-3 px-2 py-0.5 rounded-lg hover:bg-slate-900/50 ${msg.isMe ? 'flex-row-reverse' : ''} ${showHeader ? 'mt-3' : 'mt-0.5'}`}
-                                onMouseEnter={() => setHoveredMsg(msg.id)}
-                                onMouseLeave={() => setHoveredMsg(null)}
+                                msgId={msg.id}
+                                isMe={msg.isMe}
+                                onVisible={handleMarkRead}
                             >
-                                {/* 头像（只在组开头显示） */}
-                                {showHeader ? (
-                                    <div className="w-9 h-9 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold text-sm shrink-0 mt-0.5">
-                                        {msg.sender[0]?.toUpperCase()}
-                                    </div>
-                                ) : (
-                                    <div className="w-9 shrink-0" />
-                                )}
-
-                                <div className={`flex-1 min-w-0 ${msg.isMe ? 'text-right' : ''}`}>
-                                    {showHeader && (
-                                        <div className={`flex items-baseline gap-2 mb-1 ${msg.isMe ? 'flex-row-reverse' : ''}`}>
-                                            <span className="font-semibold text-sm text-white">{msg.sender}</span>
-                                            <span className="text-xs text-slate-500">{msg.time}</span>
+                                <motion.div
+                                    initial={{ opacity: 0, y: 8 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    className={`group relative flex items-start gap-3 px-2 py-0.5 rounded-lg hover:bg-slate-900/50 ${msg.isMe ? 'flex-row-reverse' : ''} ${showHeader ? 'mt-3' : 'mt-0.5'}`}
+                                    onMouseEnter={() => setHoveredMsg(msg.id)}
+                                    onMouseLeave={() => { setHoveredMsg(null); setEmojiPickerFor(null) }}
+                                >
+                                    {/* 头像 */}
+                                    {showHeader ? (
+                                        <div className="w-9 h-9 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold text-sm shrink-0 mt-0.5">
+                                            {msg.sender[0]?.toUpperCase()}
                                         </div>
+                                    ) : (
+                                        <div className="w-9 shrink-0" />
                                     )}
-                                    <div className={`inline-block px-3 py-2 rounded-2xl text-sm max-w-[75%] text-left break-words
-                                        ${msg.isMe ? 'bg-indigo-600 text-white rounded-tr-sm' : 'bg-slate-800 text-slate-200 rounded-tl-sm'}
-                                        ${!msg.isDecrypted ? 'opacity-60 italic' : ''}`}
-                                    >
-                                        {msg.text.startsWith('[FILE:') ? (
-                                            <div className="flex items-center gap-2">
-                                                <Paperclip className="w-4 h-4 shrink-0" />
-                                                <a
-                                                    href={msg.text.match(/\((.*?)\)/)?.[1] || '#'}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="underline underline-offset-2 hover:opacity-80"
-                                                >
-                                                    {msg.text.match(/\[FILE:(.*?)\]/)?.[1] || '下载文件'}
-                                                </a>
+
+                                    <div className={`flex-1 min-w-0 ${msg.isMe ? 'text-right' : ''}`}>
+                                        {showHeader && (
+                                            <div className={`flex items-baseline gap-2 mb-1 ${msg.isMe ? 'flex-row-reverse' : ''}`}>
+                                                <span className="font-semibold text-sm text-white">{msg.sender}</span>
+                                                <span className="text-xs text-slate-500">{msg.time}</span>
                                             </div>
-                                        ) : (
-                                            <p className="leading-relaxed">{msg.text}</p>
+                                        )}
+
+                                        {/* 引用回复展示 */}
+                                        {msg.replyTo && (
+                                            <div className={`${msg.isMe ? 'flex justify-end' : ''}`}>
+                                                <MessageReply reply={msg.replyTo} />
+                                            </div>
+                                        )}
+
+                                        <div className={`inline-block px-3 py-2 rounded-2xl text-sm max-w-[75%] text-left break-words
+                                            ${msg.isMe ? 'bg-indigo-600 text-white rounded-tr-sm' : 'bg-slate-800 text-slate-200 rounded-tl-sm'}
+                                            ${!msg.isDecrypted ? 'opacity-60 italic' : ''}`}
+                                        >
+                                            {fileMatch ? (
+                                                (() => {
+                                                    const [, fileName, fileUrl] = fileMatch
+                                                    return isImageUrl(fileUrl) ? (
+                                                        <ImagePreview src={fileUrl} alt={fileName} />
+                                                    ) : (
+                                                        <div className="flex items-center gap-2">
+                                                            <Paperclip className="w-4 h-4 shrink-0" />
+                                                            <a
+                                                                href={fileUrl}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                className="underline underline-offset-2 hover:opacity-80"
+                                                            >
+                                                                {fileName || '下载文件'}
+                                                            </a>
+                                                        </div>
+                                                    )
+                                                })()
+                                            ) : (
+                                                <p className="leading-relaxed">{msg.text}</p>
+                                            )}
+                                        </div>
+
+                                        {/* 已读状态（仅自己发出的消息） */}
+                                        {msg.isMe && (
+                                            <div className={`text-[10px] mt-0.5 ${isRead ? 'text-indigo-400' : 'text-slate-600'}`}>
+                                                {isRead ? '✓✓' : '✓'}
+                                            </div>
+                                        )}
+
+                                        {/* Reactions */}
+                                        {msgReactions.length > 0 && (
+                                            <div className={`${msg.isMe ? 'flex justify-end' : ''}`}>
+                                                <MessageReaction
+                                                    reactions={msgReactions}
+                                                    onToggle={(emoji) => handleToggleReaction(msg.id, emoji)}
+                                                />
+                                            </div>
                                         )}
                                     </div>
-                                </div>
 
-                                {/* hover操作菜单 */}
-                                <AnimatePresence>
-                                    {isHovered && (
-                                        <motion.div
-                                            initial={{ opacity: 0, scale: 0.9 }}
-                                            animate={{ opacity: 1, scale: 1 }}
-                                            exit={{ opacity: 0, scale: 0.9 }}
-                                            className={`absolute top-0 ${msg.isMe ? 'left-2' : 'right-2'} flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg px-1 py-0.5 shadow-lg z-10`}
-                                        >
-                                            {msg.isMe && (
-                                                <button
-                                                    onClick={() => handleDeleteMessage(msg.id)}
-                                                    className="p-1.5 text-slate-400 hover:text-red-400 rounded transition-colors"
-                                                    title="删除"
-                                                >
-                                                    <Trash2 className="w-3.5 h-3.5" />
-                                                </button>
-                                            )}
-                                            <button
-                                                onClick={() => setInput(`> ${msg.text}\n`)}
-                                                className="p-1.5 text-slate-400 hover:text-indigo-400 rounded transition-colors text-xs font-medium"
-                                                title="引用回复"
+                                    {/* hover操作菜单 */}
+                                    <AnimatePresence>
+                                        {isHovered && (
+                                            <motion.div
+                                                initial={{ opacity: 0, scale: 0.9 }}
+                                                animate={{ opacity: 1, scale: 1 }}
+                                                exit={{ opacity: 0, scale: 0.9 }}
+                                                className={`absolute top-0 ${msg.isMe ? 'left-2' : 'right-2'} flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg px-1 py-0.5 shadow-lg z-10`}
                                             >
-                                                ↩
-                                            </button>
-                                            <button className="p-1.5 text-slate-400 hover:text-yellow-400 rounded transition-colors text-xs" title="更多">
-                                                <ChevronDown className="w-3.5 h-3.5" />
-                                            </button>
-                                        </motion.div>
-                                    )}
-                                </AnimatePresence>
-                            </motion.div>
+                                                {/* Emoji reaction button */}
+                                                <div className="relative">
+                                                    <button
+                                                        onClick={() => setEmojiPickerFor(prev => prev === msg.id ? null : msg.id)}
+                                                        className="p-1.5 text-slate-400 hover:text-yellow-400 rounded transition-colors"
+                                                        title="添加表情"
+                                                    >
+                                                        <Smile className="w-3.5 h-3.5" />
+                                                    </button>
+                                                    {emojiPickerFor === msg.id && (
+                                                        <div className={`absolute bottom-full mb-1 ${msg.isMe ? 'right-0' : 'left-0'} z-20`}>
+                                                            <EmojiPicker
+                                                                onSelect={(emoji) => handleAddEmoji(msg.id, emoji)}
+                                                                onClose={() => setEmojiPickerFor(null)}
+                                                            />
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Reply button */}
+                                                <button
+                                                    onClick={() => setReplyTo({ id: msg.id, sender: msg.sender, text: msg.text })}
+                                                    className="p-1.5 text-slate-400 hover:text-indigo-400 rounded transition-colors"
+                                                    title="回复"
+                                                >
+                                                    <Reply className="w-3.5 h-3.5" />
+                                                </button>
+
+                                                {msg.isMe && (
+                                                    <button
+                                                        onClick={() => handleDeleteMessage(msg.id)}
+                                                        className="p-1.5 text-slate-400 hover:text-red-400 rounded transition-colors"
+                                                        title="删除"
+                                                    >
+                                                        <Trash2 className="w-3.5 h-3.5" />
+                                                    </button>
+                                                )}
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
+                                </motion.div>
+                            </MessageReadWrapper>
                         )
                     })}
                 </main>
 
                 {/* 输入区 */}
                 <footer className="p-3 border-t border-slate-800 bg-slate-950 shrink-0">
+                    {/* 回复提示条 */}
+                    {replyTo && (
+                        <div className="flex items-center justify-between px-3 py-1.5 mb-2 bg-slate-800 rounded-lg border-l-2 border-indigo-500 text-xs text-slate-400">
+                            <span>回复 <span className="text-indigo-400 font-medium">{replyTo.sender}</span>：{replyTo.text.slice(0, 40)}{replyTo.text.length > 40 ? '…' : ''}</span>
+                            <button onClick={() => setReplyTo(null)} className="ml-2 text-slate-500 hover:text-white transition-colors">
+                                <X className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
+                    )}
                     <form onSubmit={handleSubmit} className="flex items-end gap-2 bg-slate-800 rounded-xl px-3 py-2 border border-slate-700 focus-within:border-indigo-500 transition-colors">
                         <button
                             type="button"
