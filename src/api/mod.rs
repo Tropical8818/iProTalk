@@ -1,3 +1,9 @@
 pub mod auth;
 pub mod keys;
 pub mod messages;
+pub mod users;
+pub mod contacts;
+pub mod files;
+pub mod admin;
+pub mod channels;
+pub mod utils;

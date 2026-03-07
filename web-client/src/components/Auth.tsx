@@ -1,14 +1,13 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { User, Lock, ArrowRight, Github, AlertCircle, Mail } from 'lucide-react'
-import { authApi } from '../api'
+import { useLoginMutation, useRegisterMutation } from '../store/api/authApi'
+import { useDispatch } from 'react-redux'
+import { setCredentials } from '../store/slices/authSlice'
 
-interface AuthProps {
-    onSuccess: (data: { token: string; user_id: string; name: string }) => void
-}
-
-export const Auth = ({ onSuccess }: AuthProps) => {
+export const Auth = () => {
     const [isLogin, setIsLogin] = useState(true)
+    const dispatch = useDispatch()
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState('')
     const [formData, setFormData] = useState({
@@ -17,23 +16,34 @@ export const Auth = ({ onSuccess }: AuthProps) => {
         password: '',
     })
 
+    const [loginMutation] = useLoginMutation()
+    const [registerMutation] = useRegisterMutation()
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
         setLoading(true)
         setError('')
 
         try {
-            const response = isLogin
-                ? await authApi.login(formData)
-                : await authApi.register(formData)
+            const data = await (isLogin ? loginMutation(formData) : registerMutation(formData)).unwrap()
 
-            // Pass the full data object which includes token, user_id, and name
-            onSuccess(response.data)
-        } catch (err: any) {
+            dispatch(setCredentials({
+                user: {
+                    id: data.user_id,
+                    name: data.name,
+                    email: formData.email,
+                    e2ee_initialized: data.e2ee_initialized,
+                    is_admin: data.is_admin,
+                    is_banned: false,
+                },
+                token: data.token
+            }))
+        } catch (err: unknown) {
             console.error("Auth error:", err)
-            // Poem can return plain text errors or JSON
-            const serverMsg = err.response?.data?.message || err.response?.data
-            setError(typeof serverMsg === 'string' ? serverMsg : 'Authentication failed. Please check your credentials.')
+            // RTK Query unwraps the error into err.data for 400/500 requests automatically
+            const error = err as { data?: string | { message?: string } };
+            const serverMsg = typeof error.data === 'string' ? error.data : error.data?.message;
+            setError(serverMsg || '登录失败，请检查您的账号和密码')
         } finally {
             setLoading(false)
         }
@@ -54,10 +64,10 @@ export const Auth = ({ onSuccess }: AuthProps) => {
                         <User className="text-indigo-500 w-8 h-8" />
                     </div>
                     <h2 className="text-3xl font-bold text-white tracking-tight">
-                        {isLogin ? 'Welcome Back' : 'Create Account'}
+                        {isLogin ? '欢迎回来' : '创建账号'}
                     </h2>
                     <p className="text-slate-400 mt-2">
-                        {isLogin ? 'Enter your details to sign in' : 'Join iProTalk secure messaging'}
+                        {isLogin ? '输入您的账号信息登录' : '加入 iProTalk 安全通讯'}
                     </p>
                 </div>
 
@@ -81,14 +91,14 @@ export const Auth = ({ onSuccess }: AuthProps) => {
                             initial={{ opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: 'auto' }}
                         >
-                            <label className="block text-sm font-medium text-slate-300 mb-1.5 ml-1">Full Name</label>
+                            <label className="block text-sm font-medium text-slate-300 mb-1.5 ml-1">用户名</label>
                             <div className="relative group">
                                 <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-indigo-500 transition-colors" />
                                 <input
                                     type="text"
                                     required={!isLogin}
                                     className="w-full bg-slate-950/50 border border-slate-800 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl py-3 pl-11 pr-4 text-white placeholder-slate-600 outline-none transition-all"
-                                    placeholder="John Doe"
+                                    placeholder="张三"
                                     value={formData.name}
                                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                                 />
@@ -97,7 +107,7 @@ export const Auth = ({ onSuccess }: AuthProps) => {
                     )}
 
                     <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-1.5 ml-1">Email Address</label>
+                        <label className="block text-sm font-medium text-slate-300 mb-1.5 ml-1">邮箱地址</label>
                         <div className="relative group">
                             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-indigo-500 transition-colors" />
                             <input
@@ -112,7 +122,7 @@ export const Auth = ({ onSuccess }: AuthProps) => {
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-1.5 ml-1">Password</label>
+                        <label className="block text-sm font-medium text-slate-300 mb-1.5 ml-1">密码</label>
                         <div className="relative group">
                             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-indigo-500 transition-colors" />
                             <input
@@ -135,7 +145,7 @@ export const Auth = ({ onSuccess }: AuthProps) => {
                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                         ) : (
                             <>
-                                <span>{isLogin ? 'Sign In' : 'Get Started'}</span>
+                                <span>{isLogin ? '登录' : '开始使用'}</span>
                                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                             </>
                         )}
@@ -144,12 +154,12 @@ export const Auth = ({ onSuccess }: AuthProps) => {
 
                 <div className="mt-8 pt-6 border-t border-slate-800 text-center">
                     <p className="text-slate-400">
-                        {isLogin ? "Don't have an account?" : "Already have an account?"}
+                        {isLogin ? '还没有账号？' : '已有账号？'}
                         <button
                             onClick={() => setIsLogin(!isLogin)}
                             className="ml-2 text-indigo-400 font-medium hover:text-indigo-300 underline-offset-4 hover:underline transition-colors"
                         >
-                            {isLogin ? 'Sign Up' : 'Log In'}
+                            {isLogin ? '立即注册' : '去登录'}
                         </button>
                     </p>
                 </div>

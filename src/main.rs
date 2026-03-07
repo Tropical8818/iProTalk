@@ -6,7 +6,10 @@ mod api;
 mod db;
 mod models;
 
-use api::{auth::AuthApi, keys::KeysApi, messages::MessagesApi};
+use api::{
+    auth::AuthApi, keys::KeysApi, messages::MessagesApi, users::UsersApi,
+    contacts::ContactsApi, files::FilesApi, admin::AdminApi, channels::ChannelsApi,
+};
 use db::init_db;
 
 #[tokio::main]
@@ -27,7 +30,7 @@ async fn main() -> Result<(), std::io::Error> {
 
     // create the API service
     let api_service = poem_openapi::OpenApiService::new(
-        (AuthApi, KeysApi, MessagesApi),
+        (AuthApi, KeysApi, MessagesApi, UsersApi, ContactsApi, FilesApi, AdminApi, ChannelsApi),
         "iProTalk API",
         "0.1.0",
     )
@@ -41,6 +44,8 @@ async fn main() -> Result<(), std::io::Error> {
     let app = Route::new()
         .at("/", poem::endpoint::StaticFilesEndpoint::new("static").index_file("index.html"))
         .at("/api/messages/events", poem::get(api::messages::sse_handler))
+        .at("/api/users/:uid/avatar", poem::get(api::users::get_avatar))
+        .at("/api/files/:id", poem::get(api::files::download_file))
         .nest("/api", api_service)
         .nest("/docs", ui)
         .nest("/spec", spec)

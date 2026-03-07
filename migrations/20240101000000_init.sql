@@ -5,6 +5,9 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     name TEXT NOT NULL,
     avatar TEXT,
+    is_admin BOOLEAN NOT NULL DEFAULT 0,
+    is_banned BOOLEAN NOT NULL DEFAULT 0,
+    e2ee_initialized BOOLEAN NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -32,4 +35,36 @@ CREATE TABLE IF NOT EXISTS group_members (
     PRIMARY KEY(group_id, user_id),
     FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS contacts (
+    id TEXT PRIMARY KEY NOT NULL,
+    requester_id TEXT NOT NULL,
+    addressee_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', -- pending, added, blocked
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(requester_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(addressee_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS files (
+    id TEXT PRIMARY KEY NOT NULL,
+    uploader_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    path TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    hash TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(uploader_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS channels (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    is_public BOOLEAN NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE CASCADE
 );

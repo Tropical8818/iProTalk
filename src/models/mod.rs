@@ -19,6 +19,8 @@ pub struct AuthResponse {
     pub token: String,
     pub user_id: String,
     pub name: String,
+    pub e2ee_initialized: bool,
+    pub is_admin: bool,
 }
 
 #[derive(Debug, Object, Serialize, Deserialize)]
@@ -41,6 +43,7 @@ pub struct MessagePayload {
     pub sender_id: String,
     pub group_id: Option<String>,
     pub recipient_id: Option<String>,
+    pub recipient_keys: std::collections::HashMap<String, String>, // user_id -> encrypted session key Base64
 }
 
 #[derive(Debug, Object, Serialize, Deserialize, Clone)]

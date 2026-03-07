@@ -45,6 +45,8 @@ impl AuthApi {
                     token,
                     user_id,
                     name: req.0.name,
+                    e2ee_initialized: false,
+                    is_admin: false,
                 }))
             },
             Err(e) => {
@@ -64,7 +66,7 @@ impl AuthApi {
         req: Json<LoginRequest>,
     ) -> Result<Json<AuthResponse>> {
         let row = sqlx::query(
-            "SELECT id, password_hash, name FROM users WHERE email = ?"
+            "SELECT id, password_hash, name, is_admin, e2ee_initialized FROM users WHERE email = ?"
         )
         .bind(&req.0.email)
         .fetch_optional(&state.sql_pool)
@@ -75,6 +77,8 @@ impl AuthApi {
             let user_id: String = row.get("id");
             let hash: String = row.get("password_hash");
             let name: String = row.get("name");
+            let is_admin: bool = row.try_get("is_admin").unwrap_or(false);
+            let e2ee_initialized: bool = row.try_get("e2ee_initialized").unwrap_or(false);
 
             if verify(&req.0.password, &hash).map_err(InternalServerError)? {
                 let token = create_token(&user_id)?;
@@ -82,6 +86,8 @@ impl AuthApi {
                     token,
                     user_id,
                     name,
+                    is_admin,
+                    e2ee_initialized,
                 }))
             } else {
                  Err(poem::Error::from_string("Invalid credentials", poem::http::StatusCode::BAD_REQUEST))

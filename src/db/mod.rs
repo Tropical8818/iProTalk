@@ -21,21 +21,40 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
 
     // Attempt to extract directory from sqlite URL for directory creation
     if database_url.starts_with("sqlite://") && !database_url.contains(":memory:") {
-        let path = &database_url[9..];
-        if let Some(parent) = std::path::Path::new(path).parent() {
+        // Remove mode parameter if present
+        let path_part = database_url[9..].split('?').next().unwrap_or("");
+        if let Some(parent) = std::path::Path::new(path_part).parent() {
             std::fs::create_dir_all(parent)?;
         }
     }
 
-    // Initialize SQLite
+    // Initialize SQLite with WAL mode for better concurrency
     let sql_pool = SqlitePool::connect(database_url).await
         .map_err(|e| anyhow::anyhow!("Failed to connect to SQLite {}: {}", database_url, e))?;
-    
-    // Run migrations
+
+    // Enable WAL mode for better performance
+    sqlx::query("PRAGMA journal_mode=WAL").execute(&sql_pool).await.ok();
+    sqlx::query("PRAGMA foreign_keys=ON").execute(&sql_pool).await.ok();
+
+    // Run initial schema migration (CREATE TABLE IF NOT EXISTS is safe to re-run)
     sqlx::query(include_str!("../../migrations/20240101000000_init.sql"))
         .execute(&sql_pool)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
+
+    // Run additive migrations that add columns to existing tables
+    // SQLite doesn't support ADD COLUMN IF NOT EXISTS, so we try each and ignore errors
+    let additive_migrations: &[&str] = &[
+        "ALTER TABLE users ADD COLUMN avatar TEXT",
+        "ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN is_banned BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN e2ee_initialized BOOLEAN NOT NULL DEFAULT 0",
+    ];
+
+    for stmt in additive_migrations {
+        // Ignore "duplicate column" errors; the column already exists
+        let _ = sqlx::query(stmt).execute(&sql_pool).await;
+    }
 
     // Initialize Sled
     let msg_db = sled::open(msg_db_path)

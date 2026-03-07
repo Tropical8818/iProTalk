@@ -24,7 +24,8 @@ impl KeysApi {
         // But wait, the request doesn't have user_id.
         // Let's decode the token insecurely for now just to get the 'sub'.
         
-        let user_id = decode_user_id_from_token(_jwt).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+        let user_id = crate::api::utils::decode_user_id_from_token(&token)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
 
         sqlx::query(
             "INSERT INTO user_keys (user_id, public_key, signed_pre_key) VALUES (?, ?, ?)
@@ -33,6 +34,14 @@ impl KeysApi {
         .bind(&user_id)
         .bind(&req.0.public_key)
         .bind(&req.0.signed_pre_key)
+        .execute(&state.sql_pool)
+        .await
+        .map_err(InternalServerError)?;
+
+        sqlx::query(
+            "UPDATE users SET e2ee_initialized = 1 WHERE id = ?"
+        )
+        .bind(&user_id)
         .execute(&state.sql_pool)
         .await
         .map_err(InternalServerError)?;
@@ -66,22 +75,3 @@ impl KeysApi {
     }
 }
 
-// Helper to extract user_id from JWT (without validation for MVP simplicity, or with basic validation)
-fn decode_user_id_from_token(token: &str) -> anyhow::Result<String> {
-    use jsonwebtoken::{decode, Validation, DecodingKey};
-    use serde::Deserialize;
-
-    #[derive(Deserialize)]
-    struct Claims {
-        sub: String,
-    }
-
-    let secret = std::env::var("SECRET_KEY").unwrap_or_else(|_| "secret_key".to_string());
-    let token_data = decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_ref()),
-        &Validation::default(),
-    )?;
-    
-    Ok(token_data.claims.sub)
-}

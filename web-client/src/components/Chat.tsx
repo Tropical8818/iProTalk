@@ -1,203 +1,591 @@
-import { useState, useEffect, useRef } from 'react'
-import { motion } from 'framer-motion'
-import { Send, Hash, Users, LogOut, MessageSquare } from 'lucide-react'
-import { messageApi, subscribeToEvents } from '../api'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Send, Hash, Users, MessageSquare, KeyRound, Settings, Paperclip, Plus, Search, Trash2, ChevronDown } from 'lucide-react'
+import { messageApi, subscribeToEvents, keyApi, usersApi, type StoredMessage } from '../api'
+import {
+    generateKeyPair, exportPrivateKey, exportPublicKey,
+    importPrivateKey, importPublicKey, deriveSharedSecret,
+    generateSessionKey, encryptMessage, encryptSessionKey,
+    decryptSessionKey, decryptMessage
+} from '../lib/crypto'
+import { useSelector } from 'react-redux'
+import { RootState } from '../store'
+import { useUploadFileChunkMutation, usePrepareFileMutation } from '../store/api/filesApi'
+import UserSettingsModal from './UserSettingsModal'
+import UserSearchModal from './UserSearchModal'
 
-interface ChatProps {
-    user: { id: string; name: string }
-    onLogout: () => void
+// ===== 类型 =====
+interface Message {
+    id: string
+    timestamp: number
+    sender: string
+    senderId: string
+    text: string
+    time: string
+    isMe: boolean
+    isDecrypted: boolean
 }
 
-export const Chat = ({ user, onLogout }: ChatProps) => {
-    const [messages, setMessages] = useState<any[]>([])
+type ViewKey = { type: 'channel'; id: string } | { type: 'dm'; uid: string; name: string }
+
+interface UserInfo { name: string; publicKey: string }
+
+// ===== 主组件 =====
+export const Chat = () => {
+    const user = useSelector((state: RootState) => state.auth.user)
+
+    // --- 视图状态 ---
+    const [currentView, setCurrentView] = useState<ViewKey>({ type: 'channel', id: 'general' })
+    const [messages, setMessages] = useState<Message[]>([])
     const [input, setInput] = useState('')
     const [loading, setLoading] = useState(false)
+    const [historyLoading, setHistoryLoading] = useState(false)
+    const [keysStatus, setKeysStatus] = useState<'init' | 'ready' | 'error'>('init')
+    const [keysStatusText, setKeysStatusText] = useState('初始化E2EE中...')
+    const [showSettings, setShowSettings] = useState(false)
+    const [showSearch, setShowSearch] = useState(false)
+    const [hoveredMsg, setHoveredMsg] = useState<string | null>(null)
+
     const scrollRef = useRef<HTMLDivElement>(null)
+    const fileInputRef = useRef<HTMLInputElement>(null)
+
+    const [prepareFile] = usePrepareFileMutation()
+    const [uploadFileChunk] = useUploadFileChunkMutation()
+
+    // --- 用户目录（公钥+名字） ---
+    const [userDirectory, setUserDirectory] = useState<Record<string, UserInfo>>({})
+    // --- DM 联系人列表 ---
+    const [contacts, setContacts] = useState<Array<{ uid: string; name: string }>>([])
+
+    // ===== 初始化 E2EE =====
+    const initCrypto = useCallback(async () => {
+        if (!user) return
+        try {
+            let privKeyB64 = localStorage.getItem('e2ee_private_key')
+            let pubKeyB64 = localStorage.getItem('e2ee_public_key')
+
+            if (!privKeyB64 || !pubKeyB64) {
+                setKeysStatusText('正在生成加密密钥...')
+                const keyPair = await generateKeyPair()
+                privKeyB64 = await exportPrivateKey(keyPair.privateKey)
+                pubKeyB64 = await exportPublicKey(keyPair.publicKey)
+                localStorage.setItem('e2ee_private_key', privKeyB64)
+                localStorage.setItem('e2ee_public_key', pubKeyB64)
+                setKeysStatusText('上传公钥...')
+                await keyApi.uploadKeys(pubKeyB64)
+            }
+
+            setKeysStatusText('加载用户目录...')
+            const res = await usersApi.getAllUsers()
+            const dir: Record<string, UserInfo> = {}
+            res.data.forEach(u => {
+                if (u.public_key) dir[u.user_id] = { name: u.name, publicKey: u.public_key }
+            })
+            setUserDirectory(dir)
+            setKeysStatus('ready')
+            setKeysStatusText('E2EE 就绪')
+        } catch (e) {
+            console.error(e)
+            setKeysStatus('error')
+            setKeysStatusText('加密初始化失败')
+        }
+    }, [user])
+
+    useEffect(() => { initCrypto() }, [initCrypto])
+
+    // ===== 加载历史消息 =====
+    const loadHistory = useCallback(async (view: ViewKey) => {
+        if (keysStatus !== 'ready' || !user) return
+        setHistoryLoading(true)
+        setMessages([])
+        try {
+            let stored: StoredMessage[]
+            if (view.type === 'channel') {
+                const res = await messageApi.getGroupHistory(view.id)
+                stored = res.data
+            } else {
+                const res = await messageApi.getDMHistory(view.uid)
+                stored = res.data
+            }
+
+            const privKeyB64 = localStorage.getItem('e2ee_private_key')
+            if (!privKeyB64) return
+
+            const decryptedMsgs: Message[] = []
+            for (const storedMsg of stored) {
+                const p = storedMsg.payload
+                let text = '[加密消息]'
+                let isDecrypted = false
+                try {
+                    const encryptedSessionKeyStr = p.recipient_keys?.[user.id]
+                    if (encryptedSessionKeyStr) {
+                        const senderInfo = userDirectory[p.sender_id]
+                        if (senderInfo) {
+                            const myPrivKey = await importPrivateKey(privKeyB64)
+                            const senderPubKey = await importPublicKey(senderInfo.publicKey)
+                            const sharedSecret = await deriveSharedSecret(myPrivKey, senderPubKey)
+                            const sessionKey = await decryptSessionKey(encryptedSessionKeyStr, sharedSecret)
+                            text = await decryptMessage(sessionKey, p.encrypted_blob, p.nonce)
+                            isDecrypted = true
+                        }
+                    }
+                } catch { /* 无法解密此条消息 */ }
+
+                const senderName = userDirectory[p.sender_id]?.name || p.sender_id.slice(0, 8)
+                decryptedMsgs.push({
+                    id: storedMsg.id,
+                    timestamp: storedMsg.timestamp,
+                    sender: p.sender_id === user.id ? '我' : senderName,
+                    senderId: p.sender_id,
+                    text,
+                    time: new Date(storedMsg.timestamp * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+                    isMe: p.sender_id === user.id,
+                    isDecrypted,
+                })
+            }
+            setMessages(decryptedMsgs)
+        } catch (e) {
+            console.error('加载历史消息失败', e)
+        } finally {
+            setHistoryLoading(false)
+        }
+    }, [keysStatus, user, userDirectory])
 
     useEffect(() => {
-        const unsubscribe = subscribeToEvents((msgData) => {
-            console.log("Received SSE:", msgData)
-            const payload = msgData.payload
+        if (keysStatus === 'ready') loadHistory(currentView)
+    }, [keysStatus, currentView]) // eslint-disable-line
 
-            // Don't duplicate if we already have it (optimistic UI or simple check)
-            setMessages((prev) => {
-                // Generate a consistent ID or use one from backend if available
-                const msgId = msgData.timestamp
-                if (prev.some(m => m.timestamp === msgId)) return prev
+    // ===== 订阅实时消息 =====
+    useEffect(() => {
+        if (keysStatus !== 'ready' || !user) return
 
-                return [...prev, {
-                    id: msgId + Math.random(), // React key
-                    timestamp: msgId,
-                    // Use payload.sender_id. If it matches current user, show 'You'
-                    sender: payload.sender_id === user.id ? 'You' : payload.sender_id.slice(0, 8),
-                    // Use payload.encrypted_blob as content for now
-                    text: payload.encrypted_blob,
-                    time: new Date(msgData.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    isMe: payload.sender_id === user.id
-                }]
+        const unsub = subscribeToEvents(async (msgData) => {
+            const p = msgData.payload
+
+            // 判断是否属于当前视图
+            const isCurrentChannel = currentView.type === 'channel' && p.group_id === currentView.id
+            const isCurrentDM = currentView.type === 'dm' &&
+                p.recipient_id !== null &&
+                ((p.sender_id === user.id && p.recipient_id === currentView.uid) ||
+                    (p.sender_id === currentView.uid && p.recipient_id === user.id))
+
+            if (!isCurrentChannel && !isCurrentDM) return
+
+            let text = '[加密消息]'
+            let isDecrypted = false
+            try {
+                const privKeyB64 = localStorage.getItem('e2ee_private_key')
+                if (!privKeyB64) throw new Error()
+                const encKey = p.recipient_keys?.[user.id]
+                if (!encKey) throw new Error()
+                const senderInfo = userDirectory[p.sender_id]
+                if (!senderInfo) throw new Error()
+                const myPrivKey = await importPrivateKey(privKeyB64)
+                const senderPubKey = await importPublicKey(senderInfo.publicKey)
+                const shared = await deriveSharedSecret(myPrivKey, senderPubKey)
+                const sessKey = await decryptSessionKey(encKey, shared)
+                text = await decryptMessage(sessKey, p.encrypted_blob, p.nonce)
+                isDecrypted = true
+            } catch { /* ignore */ }
+
+            setMessages(prev => {
+                const newMsg: Message = {
+                    id: `${msgData.timestamp}-${Math.random()}`,
+                    timestamp: msgData.timestamp,
+                    sender: p.sender_id === user.id ? '我' : (userDirectory[p.sender_id]?.name || p.sender_id.slice(0, 8)),
+                    senderId: p.sender_id,
+                    text,
+                    time: new Date(msgData.timestamp * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+                    isMe: p.sender_id === user.id,
+                    isDecrypted,
+                }
+                // 去重
+                if (prev.some(m => m.id === newMsg.id)) return prev
+                return [...prev, newMsg]
             })
         })
 
-        return () => unsubscribe()
-    }, [user.id])
+        return () => unsub()
+    }, [keysStatus, user, currentView, userDirectory])
 
+    // 自动滚动到底部
     useEffect(() => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-        }
+        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }, [messages])
+
+    // ===== 加密并发送消息 =====
+    const encryptAndSend = async (text: string, view: ViewKey) => {
+        if (!user) return
+        const privKeyB64 = localStorage.getItem('e2ee_private_key')
+        if (!privKeyB64) throw new Error('缺少私钥')
+        const myPrivKey = await importPrivateKey(privKeyB64)
+        const sessionKey = await generateSessionKey()
+        const { encryptedBlob, nonce } = await encryptMessage(sessionKey, text)
+
+        const recipientKeys: Record<string, string> = {}
+        for (const [uid, uinfo] of Object.entries(userDirectory)) {
+            try {
+                const pubKey = await importPublicKey(uinfo.publicKey)
+                const shared = await deriveSharedSecret(myPrivKey, pubKey)
+                const { encryptedSessionKey } = await encryptSessionKey(sessionKey, shared)
+                recipientKeys[uid] = encryptedSessionKey
+            } catch { /* skip */ }
+        }
+
+        if (view.type === 'channel') {
+            await messageApi.sendGroupMessage(view.id, encryptedBlob, user.id, recipientKeys, nonce)
+        } else {
+            await messageApi.sendDM(view.uid, encryptedBlob, user.id, recipientKeys, nonce)
+        }
+    }
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
-        if (!input.trim() || loading) return
-
+        if (!input.trim() || loading || keysStatus !== 'ready') return
         setLoading(true)
         try {
-            // Pass current user ID
-            await messageApi.sendMessage('general', input, user.id)
+            await encryptAndSend(input.trim(), currentView)
             setInput('')
         } catch (err) {
-            console.error("Failed to send message", err)
+            console.error('发送消息失败', err)
         } finally {
             setLoading(false)
         }
     }
 
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0]
+        if (!file || loading || keysStatus !== 'ready') return
+        setLoading(true)
+        try {
+            const { file_id } = await prepareFile({ content_type: file.type || 'application/octet-stream', filename: file.name }).unwrap()
+            const formData = new FormData()
+            formData.append('file_id', file_id)
+            formData.append('chunk_is_last', 'true')
+            formData.append('filename', file.name)
+            formData.append('content_type', file.type || 'application/octet-stream')
+            formData.append('chunk_data', file)
+            const uploadRes = await uploadFileChunk(formData).unwrap()
+            const fileMsg = `[FILE:${file.name}](${uploadRes.path})`
+            await encryptAndSend(fileMsg, currentView)
+        } catch (err) {
+            console.error('文件上传失败', err)
+            alert('文件上传失败，请查看控制台')
+        } finally {
+            setLoading(false)
+            if (fileInputRef.current) fileInputRef.current.value = ''
+        }
+    }
+
+    const handleDeleteMessage = async (msgId: string) => {
+        try {
+            await messageApi.deleteMessage(msgId)
+            setMessages(prev => prev.filter(m => m.id !== msgId))
+        } catch { alert('删除失败') }
+    }
+
+    const openDM = (uid: string, name: string) => {
+        setCurrentView({ type: 'dm', uid, name })
+        if (!contacts.some(c => c.uid === uid)) {
+            setContacts(prev => [...prev, { uid, name }])
+        }
+    }
+
+    // 当前视图标题
+    const viewTitle = currentView.type === 'channel'
+        ? `#${currentView.id}`
+        : currentView.name
+
+    if (!user) return null
+
+    const otherUsers = Object.entries(userDirectory).filter(([uid]) => uid !== user.id)
+
     return (
-        <div className="flex h-screen w-full bg-slate-950 overflow-hidden">
-            {/* Sidebar */}
-            <div className="w-72 bg-slate-900 border-r border-slate-800 flex flex-col">
-                <div className="p-6 border-b border-slate-800 flex items-center gap-3">
-                    <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/20">
-                        iP
-                    </div>
-                    <span className="font-bold text-xl text-white tracking-tight">iProTalk</span>
+        <div className="flex flex-1 h-0 w-full bg-slate-950 overflow-hidden">
+            {/* ===== 左侧边栏 ===== */}
+            <div className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0">
+                {/* Logo */}
+                <div className="h-14 border-b border-slate-800 flex items-center gap-3 px-4">
+                    <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center font-bold text-white text-sm shadow-lg shadow-indigo-500/20">iP</div>
+                    <span className="font-bold text-white text-base tracking-tight">iProTalk</span>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                    <div>
-                        <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 px-2">Channels</h3>
-                        <div className="space-y-1">
-                            <button className="w-full flex items-center gap-3 px-3 py-2 bg-indigo-500/10 text-indigo-400 rounded-lg group transition-colors">
-                                <Hash className="w-4 h-4" />
-                                <span className="font-medium">general</span>
-                            </button>
-                            <button className="w-full flex items-center gap-3 px-3 py-2 text-slate-400 hover:bg-slate-800 hover:text-slate-200 rounded-lg group transition-colors text-left">
-                                <Hash className="w-4 h-4" />
-                                <span className="font-medium">development</span>
-                            </button>
-                        </div>
+                <div className="flex-1 overflow-y-auto py-3 space-y-1">
+                    {/* 频道列表 */}
+                    <div className="px-3 mb-1">
+                        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">频道</span>
                     </div>
+                    <button
+                        onClick={() => setCurrentView({ type: 'channel', id: 'general' })}
+                        className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-md mx-1 text-sm transition-colors ${currentView.type === 'channel' && currentView.id === 'general'
+                            ? 'bg-indigo-600/30 text-white'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+                    >
+                        <Hash className="w-4 h-4 shrink-0" />
+                        <span>general</span>
+                    </button>
 
-                    <div>
-                        <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 px-2">Direct Messages</h3>
-                        <div className="space-y-1">
-                            {['Alice', 'Bob', 'Charlie'].map(user => (
-                                <button key={user} className="w-full flex items-center gap-3 px-3 py-2 text-slate-400 hover:bg-slate-800 hover:text-slate-200 rounded-lg group transition-colors text-left">
-                                    <div className="w-2 h-2 rounded-full bg-green-500" />
-                                    <span className="font-medium">{user}</span>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="p-4 border-t border-slate-800 bg-slate-900/50">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center font-bold text-xs text-white">
-                                {user.name.slice(0, 2).toUpperCase()}
-                            </div>
-                            <div className="flex flex-col">
-                                <span className="text-sm font-semibold text-white">{user.name}</span>
-                                <span className="text-[10px] text-green-500">Connected</span>
-                            </div>
-                        </div>
-                        <button
-                            onClick={onLogout}
-                            className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all"
-                            title="Logout"
-                        >
-                            <LogOut className="w-5 h-5" />
+                    {/* 私信列表 */}
+                    <div className="px-3 mt-4 mb-1 flex items-center justify-between">
+                        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">私信</span>
+                        <button onClick={() => setShowSearch(true)} className="text-slate-500 hover:text-white transition-colors" title="搜索用户">
+                            <Plus className="w-4 h-4" />
                         </button>
                     </div>
+                    {contacts.map(c => (
+                        <button
+                            key={c.uid}
+                            onClick={() => openDM(c.uid, c.name)}
+                            className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-md mx-1 text-sm transition-colors ${currentView.type === 'dm' && currentView.uid === c.uid
+                                ? 'bg-indigo-600/30 text-white'
+                                : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+                        >
+                            <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white shrink-0">
+                                {c.name[0]?.toUpperCase()}
+                            </div>
+                            <span className="truncate">{c.name}</span>
+                        </button>
+                    ))}
+
+                    {/* 在线用户 */}
+                    <div className="px-3 mt-4 mb-1">
+                        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">在线用户 ({otherUsers.length + 1})</span>
+                    </div>
+                    {otherUsers.map(([uid, uinfo]) => (
+                        <button
+                            key={uid}
+                            onClick={() => openDM(uid, uinfo.name)}
+                            className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md mx-1 text-sm text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
+                            title={`与 ${uinfo.name} 私信`}
+                        >
+                            <div className="relative shrink-0">
+                                <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white">
+                                    {uinfo.name[0]?.toUpperCase()}
+                                </div>
+                                <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-green-500 rounded-full border border-slate-900" />
+                            </div>
+                            <span className="truncate">{uinfo.name}</span>
+                        </button>
+                    ))}
+                    <button className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md mx-1 text-sm text-indigo-400 italic">
+                        <div className="relative shrink-0">
+                            <div className="w-6 h-6 rounded-full bg-indigo-600/30 flex items-center justify-center text-xs font-bold text-indigo-300">
+                                {user.name[0]?.toUpperCase()}
+                            </div>
+                            <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-green-500 rounded-full border border-slate-900" />
+                        </div>
+                        <span className="truncate">{user.name} (我)</span>
+                    </button>
+                </div>
+
+                {/* 底部用户信息 */}
+                <div className="h-14 border-t border-slate-800 flex items-center justify-between px-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center font-bold text-xs text-white shrink-0 relative overflow-hidden">
+                            <img
+                                src={`/api/users/${user.id}/avatar?t=${Date.now()}`}
+                                onError={(e) => { e.currentTarget.style.display = 'none' }}
+                                className="absolute inset-0 w-full h-full object-cover"
+                                alt=""
+                            />
+                            <span>{user.name.slice(0, 2).toUpperCase()}</span>
+                        </div>
+                        <div className="min-w-0">
+                            <p className="text-sm font-semibold text-white truncate">{user.name}</p>
+                            <div className="flex items-center gap-1">
+                                <KeyRound className={`w-3 h-3 ${keysStatus === 'ready' ? 'text-green-500' : keysStatus === 'error' ? 'text-red-400' : 'text-yellow-400'}`} />
+                                <span className="text-[10px] text-slate-400 truncate">{keysStatusText}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button onClick={() => setShowSettings(true)} className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all shrink-0" title="设置">
+                        <Settings className="w-4 h-4" />
+                    </button>
                 </div>
             </div>
 
-            {/* Main Chat Area */}
-            <div className="flex-1 flex flex-col bg-slate-950">
-                <header className="h-16 border-b border-slate-800 flex items-center justify-between px-6 bg-slate-950/50 backdrop-blur-md">
+            {/* ===== 主聊天区域 ===== */}
+            <div className="flex-1 flex flex-col min-w-0">
+                {/* 顶部栏 */}
+                <header className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-950 shrink-0">
                     <div className="flex items-center gap-2">
-                        <Hash className="text-slate-500 w-5 h-5" />
-                        <h2 className="font-bold text-white uppercase tracking-tight">general</h2>
+                        {currentView.type === 'channel'
+                            ? <Hash className="text-slate-500 w-5 h-5" />
+                            : <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white">
+                                {(currentView as { name: string }).name[0]?.toUpperCase()}
+                            </div>
+                        }
+                        <h2 className="font-bold text-white">{viewTitle}</h2>
+                        <span className="bg-green-500/10 text-green-400 text-[10px] px-2 py-0.5 rounded-full border border-green-500/20 flex items-center gap-1 ml-1">
+                            <KeyRound className="w-3 h-3" /> E2EE
+                        </span>
                     </div>
-                    <div className="flex items-center gap-4">
-                        <button className="p-2 text-slate-400 hover:text-white transition-colors">
-                            <Users className="w-5 h-5" />
+                    <div className="flex items-center gap-2">
+                        <button onClick={() => setShowSearch(true)} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all" title="搜索用户">
+                            <Search className="w-4 h-4" />
+                        </button>
+                        <button className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all" title="成员列表">
+                            <Users className="w-4 h-4" />
                         </button>
                     </div>
                 </header>
 
-                <main ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth">
-                    {messages.length === 0 && (
-                        <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-4">
-                            <MessageSquare className="w-12 h-12 opacity-20" />
-                            <p>No messages yet. Start the conversation!</p>
+                {/* 消息列表 */}
+                <main ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-1">
+                    {historyLoading && (
+                        <div className="flex justify-center py-8">
+                            <div className="w-6 h-6 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
                         </div>
                     )}
-                    {messages.map(msg => (
-                        <motion.div
-                            initial={{ opacity: 0, x: msg.isMe ? 10 : -10 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            key={msg.id}
-                            className={`flex items-start gap-4 group ${msg.isMe ? 'flex-row-reverse' : ''}`}
-                        >
-                            <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold shrink-0">
-                                {msg.sender[0]}
-                            </div>
-                            <div className={`flex-1 ${msg.isMe ? 'text-right' : ''}`}>
-                                <div className={`flex items-center gap-2 mb-1 ${msg.isMe ? 'flex-row-reverse' : ''}`}>
-                                    <span className="font-bold text-white">{msg.sender}</span>
-                                    <span className="text-xs text-slate-500">{msg.time}</span>
+                    {!historyLoading && messages.length === 0 && (
+                        <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-3 py-16">
+                            <MessageSquare className="w-12 h-12 opacity-20" />
+                            <p className="text-sm">暂无消息，开始对话吧！</p>
+                        </div>
+                    )}
+
+                    {messages.map((msg, idx) => {
+                        const prevMsg = messages[idx - 1]
+                        const showHeader = !prevMsg || prevMsg.senderId !== msg.senderId ||
+                            (msg.timestamp - prevMsg.timestamp) > 300 // 5分钟间隔重新显示头像
+                        const isHovered = hoveredMsg === msg.id
+
+                        return (
+                            <motion.div
+                                key={msg.id}
+                                initial={{ opacity: 0, y: 8 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className={`group relative flex items-start gap-3 px-2 py-0.5 rounded-lg hover:bg-slate-900/50 ${msg.isMe ? 'flex-row-reverse' : ''} ${showHeader ? 'mt-3' : 'mt-0.5'}`}
+                                onMouseEnter={() => setHoveredMsg(msg.id)}
+                                onMouseLeave={() => setHoveredMsg(null)}
+                            >
+                                {/* 头像（只在组开头显示） */}
+                                {showHeader ? (
+                                    <div className="w-9 h-9 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold text-sm shrink-0 mt-0.5">
+                                        {msg.sender[0]?.toUpperCase()}
+                                    </div>
+                                ) : (
+                                    <div className="w-9 shrink-0" />
+                                )}
+
+                                <div className={`flex-1 min-w-0 ${msg.isMe ? 'text-right' : ''}`}>
+                                    {showHeader && (
+                                        <div className={`flex items-baseline gap-2 mb-1 ${msg.isMe ? 'flex-row-reverse' : ''}`}>
+                                            <span className="font-semibold text-sm text-white">{msg.sender}</span>
+                                            <span className="text-xs text-slate-500">{msg.time}</span>
+                                        </div>
+                                    )}
+                                    <div className={`inline-block px-3 py-2 rounded-2xl text-sm max-w-[75%] text-left break-words
+                                        ${msg.isMe ? 'bg-indigo-600 text-white rounded-tr-sm' : 'bg-slate-800 text-slate-200 rounded-tl-sm'}
+                                        ${!msg.isDecrypted ? 'opacity-60 italic' : ''}`}
+                                    >
+                                        {msg.text.startsWith('[FILE:') ? (
+                                            <div className="flex items-center gap-2">
+                                                <Paperclip className="w-4 h-4 shrink-0" />
+                                                <a
+                                                    href={msg.text.match(/\((.*?)\)/)?.[1] || '#'}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="underline underline-offset-2 hover:opacity-80"
+                                                >
+                                                    {msg.text.match(/\[FILE:(.*?)\]/)?.[1] || '下载文件'}
+                                                </a>
+                                            </div>
+                                        ) : (
+                                            <p className="leading-relaxed">{msg.text}</p>
+                                        )}
+                                    </div>
                                 </div>
-                                <div className={`inline-block p-3 rounded-2xl max-w-[80%] text-left ${msg.isMe
-                                    ? 'bg-indigo-600 text-white rounded-tr-none'
-                                    : 'bg-slate-800 text-slate-300 rounded-tl-none'
-                                    }`}>
-                                    <p className="leading-relaxed">{msg.text}</p>
-                                </div>
-                            </div>
-                        </motion.div>
-                    ))}
+
+                                {/* hover操作菜单 */}
+                                <AnimatePresence>
+                                    {isHovered && (
+                                        <motion.div
+                                            initial={{ opacity: 0, scale: 0.9 }}
+                                            animate={{ opacity: 1, scale: 1 }}
+                                            exit={{ opacity: 0, scale: 0.9 }}
+                                            className={`absolute top-0 ${msg.isMe ? 'left-2' : 'right-2'} flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg px-1 py-0.5 shadow-lg z-10`}
+                                        >
+                                            {msg.isMe && (
+                                                <button
+                                                    onClick={() => handleDeleteMessage(msg.id)}
+                                                    className="p-1.5 text-slate-400 hover:text-red-400 rounded transition-colors"
+                                                    title="删除"
+                                                >
+                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={() => setInput(`> ${msg.text}\n`)}
+                                                className="p-1.5 text-slate-400 hover:text-indigo-400 rounded transition-colors text-xs font-medium"
+                                                title="引用回复"
+                                            >
+                                                ↩
+                                            </button>
+                                            <button className="p-1.5 text-slate-400 hover:text-yellow-400 rounded transition-colors text-xs" title="更多">
+                                                <ChevronDown className="w-3.5 h-3.5" />
+                                            </button>
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </motion.div>
+                        )
+                    })}
                 </main>
 
-                <footer className="p-6">
-                    <form onSubmit={handleSubmit} className="relative flex items-center gap-4">
-                        <div className="relative flex-1">
-                            <input
-                                type="text"
-                                placeholder="Message #general"
-                                className="w-full bg-slate-900 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 rounded-2xl py-4 pl-12 pr-4 text-white placeholder-slate-500 outline-none transition-all shadow-xl disabled:opacity-50"
-                                value={input}
-                                disabled={loading}
-                                onChange={(e) => setInput(e.target.value)}
-                            />
-                            <MessageSquare className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
-                        </div>
+                {/* 输入区 */}
+                <footer className="p-3 border-t border-slate-800 bg-slate-950 shrink-0">
+                    <form onSubmit={handleSubmit} className="flex items-end gap-2 bg-slate-800 rounded-xl px-3 py-2 border border-slate-700 focus-within:border-indigo-500 transition-colors">
+                        <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={loading || keysStatus !== 'ready'}
+                            className="p-1.5 text-slate-400 hover:text-indigo-400 transition-colors disabled:opacity-40 shrink-0 self-end mb-0.5"
+                        >
+                            <Paperclip className="w-5 h-5" />
+                        </button>
+                        <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
+
+                        <textarea
+                            rows={1}
+                            placeholder={keysStatus === 'ready' ? `发送消息到 ${viewTitle}（端对端加密）` : keysStatusText}
+                            className="flex-1 bg-transparent text-white placeholder-slate-500 outline-none resize-none self-center text-sm leading-relaxed max-h-32"
+                            value={input}
+                            disabled={loading || keysStatus !== 'ready'}
+                            onChange={(e) => setInput(e.target.value)}
+                            onKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault()
+                                    handleSubmit(e as unknown as React.FormEvent)
+                                }
+                            }}
+                        />
+
                         <button
                             type="submit"
-                            disabled={loading || !input.trim()}
-                            className="bg-indigo-600 hover:bg-indigo-500 text-white p-4 rounded-2xl shadow-lg shadow-indigo-500/20 group transition-all shrink-0 disabled:opacity-50 disabled:grayscale"
+                            disabled={loading || !input.trim() || keysStatus !== 'ready'}
+                            className="p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-all shrink-0 self-end disabled:opacity-40 disabled:grayscale"
                         >
-                            {loading ? (
-                                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            ) : (
-                                <Send className="w-5 h-5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                            )}
+                            {loading
+                                ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                : <Send className="w-5 h-5" />
+                            }
                         </button>
                     </form>
+                    <p className="text-[10px] text-slate-600 text-center mt-1">
+                        <KeyRound className="w-3 h-3 inline mr-1" />所有消息均经过端对端加密 · Enter 发送 · Shift+Enter 换行
+                    </p>
                 </footer>
             </div>
+
+            {/* ===== 弹窗 ===== */}
+            {showSettings && <UserSettingsModal onClose={() => setShowSettings(false)} />}
+            {showSearch && (
+                <UserSearchModal
+                    onClose={() => setShowSearch(false)}
+                    onStartDM={(uid, name) => { openDM(uid, name); setShowSearch(false) }}
+                />
+            )}
         </div>
     )
 }
