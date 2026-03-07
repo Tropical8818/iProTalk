@@ -13,6 +13,8 @@ import { RootState } from '../store'
 import { useUploadFileChunkMutation, usePrepareFileMutation } from '../store/api/filesApi'
 import UserSettingsModal from './UserSettingsModal'
 import UserSearchModal from './UserSearchModal'
+import Picker from '@emoji-mart/react'
+import emojiData from '@emoji-mart/data'
 
 // ===== 类型 =====
 interface Message {
@@ -24,6 +26,7 @@ interface Message {
     time: string
     isMe: boolean
     isDecrypted: boolean
+    reactions?: Record<string, string[]>
 }
 
 type ViewKey = { type: 'channel'; id: string } | { type: 'dm'; uid: string; name: string }
@@ -45,9 +48,12 @@ export const Chat = () => {
     const [showSettings, setShowSettings] = useState(false)
     const [showSearch, setShowSearch] = useState(false)
     const [hoveredMsg, setHoveredMsg] = useState<string | null>(null)
+    const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+    const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null)
 
     const scrollRef = useRef<HTMLDivElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const emojiPickerRef = useRef<HTMLDivElement>(null)
 
     const [prepareFile] = usePrepareFileMutation()
     const [uploadFileChunk] = useUploadFileChunkMutation()
@@ -284,6 +290,27 @@ export const Chat = () => {
         } catch { alert('删除失败') }
     }
 
+    const handleToggleReaction = (msgId: string, emoji: string) => {
+        if (!user) return
+        setMessages(prev => prev.map(m => {
+            if (m.id !== msgId) return m
+            const reactions = { ...(m.reactions ?? {}) }
+            const users = reactions[emoji] ? [...reactions[emoji]] : []
+            const idx = users.indexOf(user.id)
+            if (idx >= 0) {
+                users.splice(idx, 1)
+            } else {
+                users.push(user.id)
+            }
+            if (users.length === 0) {
+                delete reactions[emoji]
+            } else {
+                reactions[emoji] = users
+            }
+            return { ...m, reactions }
+        }))
+    }
+
     const openDM = (uid: string, name: string) => {
         setCurrentView({ type: 'dm', uid, name })
         if (!contacts.some(c => c.uid === uid)) {
@@ -496,6 +523,36 @@ export const Chat = () => {
                                         )}
                                     </div>
                                 </div>
+                                     {/* Reactions */}
+                                     {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+                                         <div className={`flex flex-wrap gap-1 mt-1 ${msg.isMe ? 'justify-end' : 'justify-start'}`}>
+                                             {Object.entries(msg.reactions).map(([emoji, users]) => (
+                                                 <button
+                                                     key={emoji}
+                                                     onClick={() => handleToggleReaction(msg.id, emoji)}
+                                                     className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${users.includes(user?.id ?? '') ? 'bg-indigo-600/30 border-indigo-500/50 text-indigo-300' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
+                                                 >
+                                                     <span>{emoji}</span>
+                                                     <span>{users.length}</span>
+                                                 </button>
+                                             ))}
+                                         </div>
+                                     )}
+                                     {/* Reaction picker */}
+                                     {reactionPickerMsgId === msg.id && (
+                                         <div className="relative z-20">
+                                             <Picker
+                                                 data={emojiData}
+                                                 locale="zh"
+                                                 theme="dark"
+                                                 onEmojiSelect={(emoji: { native: string }) => {
+                                                     handleToggleReaction(msg.id, emoji.native)
+                                                     setReactionPickerMsgId(null)
+                                                 }}
+                                                 onClickOutside={() => setReactionPickerMsgId(null)}
+                                             />
+                                         </div>
+                                     )}
 
                                 {/* hover操作菜单 */}
                                 <AnimatePresence>
@@ -522,6 +579,13 @@ export const Chat = () => {
                                             >
                                                 ↩
                                             </button>
+                                            <button
+                                                onClick={() => setReactionPickerMsgId(prev => prev === msg.id ? null : msg.id)}
+                                                className="p-1.5 text-slate-400 hover:text-yellow-400 rounded transition-colors text-lg leading-none"
+                                                title="添加表情反应"
+                                            >
+                                                😊
+                                            </button>
                                             <button className="p-1.5 text-slate-400 hover:text-yellow-400 rounded transition-colors text-xs" title="更多">
                                                 <ChevronDown className="w-3.5 h-3.5" />
                                             </button>
@@ -535,6 +599,21 @@ export const Chat = () => {
 
                 {/* 输入区 */}
                 <footer className="p-3 border-t border-slate-800 bg-slate-950 shrink-0">
+                    {/* Emoji Picker 弹出层 */}
+                    {showEmojiPicker && (
+                        <div ref={emojiPickerRef} className="mb-2">
+                            <Picker
+                                data={emojiData}
+                                locale="zh"
+                                theme="dark"
+                                onEmojiSelect={(emoji: { native: string }) => {
+                                    setInput(prev => prev + emoji.native)
+                                    setShowEmojiPicker(false)
+                                }}
+                                onClickOutside={() => setShowEmojiPicker(false)}
+                            />
+                        </div>
+                    )}
                     <form onSubmit={handleSubmit} className="flex items-end gap-2 bg-slate-800 rounded-xl px-3 py-2 border border-slate-700 focus-within:border-indigo-500 transition-colors">
                         <button
                             type="button"
@@ -543,6 +622,15 @@ export const Chat = () => {
                             className="p-1.5 text-slate-400 hover:text-indigo-400 transition-colors disabled:opacity-40 shrink-0 self-end mb-0.5"
                         >
                             <Paperclip className="w-5 h-5" />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setShowEmojiPicker(prev => !prev)}
+                            disabled={loading || keysStatus !== 'ready'}
+                            className="p-1.5 text-slate-400 hover:text-yellow-400 transition-colors disabled:opacity-40 shrink-0 self-end mb-0.5 text-lg leading-none"
+                            title="表情"
+                        >
+                            😊
                         </button>
                         <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
 
