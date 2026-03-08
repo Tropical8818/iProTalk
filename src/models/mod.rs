@@ -1,6 +1,14 @@
 use serde::{Deserialize, Serialize};
 use poem_openapi::Object;
 
+#[derive(Debug, Object, Serialize, Deserialize, Clone)]
+pub struct ForwardInfo {
+    pub original_message_id: String,
+    pub original_sender_id: String,
+    pub original_sender_name: String,
+    pub original_timestamp: i64,
+}
+
 #[derive(Debug, Object, Serialize, Deserialize)]
 pub struct RegisterRequest {
     pub email: String,
@@ -44,6 +52,8 @@ pub struct MessagePayload {
     pub group_id: Option<String>,
     pub recipient_id: Option<String>,
     pub recipient_keys: std::collections::HashMap<String, String>, // user_id -> encrypted session key Base64
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_info: Option<ForwardInfo>,
 }
 
 #[derive(Debug, Object, Serialize, Deserialize, Clone)]

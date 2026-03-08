@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Hash, Users, MessageSquare, KeyRound, Settings, Paperclip, Plus, Search, Trash2, Reply, Smile, X, Edit3, Check, MoreVertical, Pin } from 'lucide-react'
+import { Send, Hash, Users, MessageSquare, KeyRound, Settings, Paperclip, Plus, Search, Trash2, Reply, Smile, X, Edit3, Check, Pin, Forward } from 'lucide-react'
 import { messageApi, reactionApi, subscribeToEvents, keyApi, usersApi, type StoredMessage } from '../api'
 import {
     generateKeyPair, exportPrivateKey, exportPublicKey,
@@ -30,6 +30,13 @@ import AnnouncementBanner from './AnnouncementBanner'
 import { requestNotificationPermission, sendDesktopNotification, setUnreadBadge, resetTitle } from '../lib/notifications'
 
 // ===== 类型 =====
+interface ForwardInfo {
+    original_message_id: string
+    original_sender_id: string
+    original_sender_name: string
+    original_timestamp: number
+}
+
 interface Message {
     id: string
     timestamp: number
@@ -40,6 +47,7 @@ interface Message {
     isMe: boolean
     isDecrypted: boolean
     replyTo?: ReplyInfo
+    forwardInfo?: ForwardInfo
 }
 
 type ViewKey = { type: 'channel'; id: string } | { type: 'dm'; uid: string; name: string }
@@ -108,7 +116,7 @@ export const Chat = () => {
     // --- ContextMenu ---
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; msgId: string; text: string; isPinned: boolean; isMine: boolean } | null>(null)
     // --- Forward ---
-    const [forwardContent, setForwardContent] = useState<string | null>(null)
+    const [forwardMsgId, setForwardMsgId] = useState<string | null>(null)
     // --- Pinned messages ---
     const [pinnedMsgIds, setPinnedMsgIds] = useState<Set<string>>(new Set())
     // --- Unread count ---
@@ -213,6 +221,7 @@ export const Chat = () => {
                     time: new Date(storedMsg.timestamp * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
                     isMe: p.sender_id === user.id,
                     isDecrypted,
+                    forwardInfo: p.forward_info,
                 })
             }
             setMessages(decryptedMsgs)
@@ -277,6 +286,7 @@ export const Chat = () => {
                     time: new Date(msgData.timestamp * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
                     isMe: p.sender_id === user.id,
                     isDecrypted,
+                    forwardInfo: p.forward_info,
                 }
                 // 去重
                 if (prev.some(m => m.id === newMsg.id)) return prev
@@ -730,6 +740,14 @@ export const Chat = () => {
                                             </div>
                                         )}
 
+                                        {/* 转发标识 */}
+                                        {msg.forwardInfo && (
+                                            <div className={`flex items-center gap-1 text-xs text-slate-400 mb-1 ${msg.isMe ? 'flex-row-reverse' : ''}`}>
+                                                <Forward className="w-3 h-3 shrink-0" />
+                                                <span>转发自 {msg.forwardInfo.original_sender_name}</span>
+                                            </div>
+                                        )}
+
                                         <div className={`inline-block px-3 py-2 rounded-2xl text-sm max-w-[75%] text-left break-words
                                             ${msg.isMe ? 'bg-indigo-600 text-white rounded-tr-sm' : 'bg-slate-800 text-slate-200 rounded-tl-sm'}
                                             ${!msg.isDecrypted ? 'opacity-60 italic' : ''}`}
@@ -852,11 +870,11 @@ export const Chat = () => {
 
                                                 {/* Forward button */}
                                                 <button
-                                                    onClick={() => setForwardContent(msg.text)}
+                                                    onClick={() => setForwardMsgId(msg.id)}
                                                     className="p-1.5 text-slate-400 hover:text-green-400 rounded transition-colors"
                                                     title="转发"
                                                 >
-                                                    <MoreVertical className="w-3.5 h-3.5" />
+                                                    <Forward className="w-3.5 h-3.5" />
                                                 </button>
 
                                                 {msg.isMe && !fileMatch && msg.isDecrypted && (
@@ -1005,12 +1023,12 @@ export const Chat = () => {
                     onClose={() => setShowMsgSearch(false)}
                 />
             )}
-            {forwardContent !== null && (
+            {forwardMsgId !== null && (
                 <ForwardModal
-                    content={forwardContent}
+                    messageId={forwardMsgId}
                     channels={remoteChannels.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }))}
                     contacts={contacts.map(c => ({ user_id: c.uid, name: c.name }))}
-                    onClose={() => setForwardContent(null)}
+                    onClose={() => setForwardMsgId(null)}
                 />
             )}
             {ctxMenu && (
@@ -1031,7 +1049,7 @@ export const Chat = () => {
                         if (msg) { setEditingMsgId(msg.id); setEditInput(msg.text) }
                         setCtxMenu(null)
                     } : undefined}
-                    onForward={() => { setForwardContent(ctxMenu.text); setCtxMenu(null) }}
+                    onForward={() => { setForwardMsgId(ctxMenu.msgId); setCtxMenu(null) }}
                     onPin={() => {
                         const cid = currentView.type === 'channel' ? currentView.id : null
                         messageApi.pinMessage(ctxMenu.msgId, cid, ctxMenu.text)
