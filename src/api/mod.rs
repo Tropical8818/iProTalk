@@ -6,4 +6,5 @@ pub mod contacts;
 pub mod files;
 pub mod admin;
 pub mod channels;
+pub mod webhooks;
 pub mod utils;

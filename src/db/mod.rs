@@ -84,6 +84,14 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
             expires_at DATETIME,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
+        "CREATE TABLE IF NOT EXISTS webhooks (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            secret TEXT NOT NULL,
+            created_by TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
     ];
 
     for stmt in additive_migrations {
