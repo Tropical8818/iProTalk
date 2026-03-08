@@ -150,6 +150,9 @@ impl WebhookApi {
             group_id: Some(channel_id),
             recipient_id: None,
             recipient_keys: std::collections::HashMap::new(),
+            reply_to: None,
+            mentions: None,
+            content_type: Some("text".to_string()),
         };
 
         let event = MessageEvent {

@@ -40,6 +40,7 @@ interface Message {
     isMe: boolean
     isDecrypted: boolean
     replyTo?: ReplyInfo
+    mentions?: string[]
 }
 
 type ViewKey = { type: 'channel'; id: string } | { type: 'dm'; uid: string; name: string }
@@ -213,8 +214,30 @@ export const Chat = () => {
                     time: new Date(storedMsg.timestamp * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
                     isMe: p.sender_id === user.id,
                     isDecrypted,
+                    mentions: p.mentions ?? undefined,
                 })
             }
+
+            // Build a map for reply context lookup
+            const msgById = new Map<string, { sender: string; text: string }>()
+            for (const msg of decryptedMsgs) {
+                msgById.set(msg.id, { sender: msg.sender, text: msg.text })
+            }
+
+            // Populate replyTo for messages that have reply_to
+            for (let i = 0; i < decryptedMsgs.length; i++) {
+                const replyToId = stored[i].payload.reply_to
+                if (replyToId) {
+                    const ref = msgById.get(replyToId)
+                    if (ref) {
+                        decryptedMsgs[i] = {
+                            ...decryptedMsgs[i],
+                            replyTo: { id: replyToId, sender: ref.sender, text: ref.text },
+                        }
+                    }
+                }
+            }
+
             setMessages(decryptedMsgs)
         } catch (e) {
             console.error('加载历史消息失败', e)
@@ -240,6 +263,15 @@ export const Chat = () => {
 
         const unsub = subscribeToEvents(async (msgData) => {
             const p = msgData.payload
+
+            // Handle mention notifications regardless of current view
+            if (msgData.event_type === 'mention') {
+                if (p.mentions?.includes(user.id)) {
+                    const senderName = userDirectory[p.sender_id]?.name || p.sender_id.slice(0, 8)
+                    sendDesktopNotification(`@提及 — ${senderName}`, '你在一条消息中被@提及')
+                }
+                return
+            }
 
             // 判断是否属于当前视图
             const isCurrentChannel = currentView.type === 'channel' && p.group_id === currentView.id
@@ -268,6 +300,14 @@ export const Chat = () => {
             } catch { /* ignore */ }
 
             setMessages(prev => {
+                // Look up reply context from existing messages
+                const replyToInfo: ReplyInfo | undefined = p.reply_to
+                    ? (() => {
+                        const ref = prev.find(m => m.id === p.reply_to)
+                        return ref ? { id: p.reply_to, sender: ref.sender, text: ref.text } : undefined
+                    })()
+                    : undefined
+
                 const newMsg: Message = {
                     id: `${msgData.timestamp}-${Math.random()}`,
                     timestamp: msgData.timestamp,
@@ -277,6 +317,8 @@ export const Chat = () => {
                     time: new Date(msgData.timestamp * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
                     isMe: p.sender_id === user.id,
                     isDecrypted,
+                    replyTo: replyToInfo,
+                    mentions: p.mentions ?? undefined,
                 }
                 // 去重
                 if (prev.some(m => m.id === newMsg.id)) return prev
@@ -304,7 +346,7 @@ export const Chat = () => {
     }, [messages])
 
     // ===== 加密并发送消息 =====
-    const encryptAndSend = async (text: string, view: ViewKey) => {
+    const encryptAndSend = async (text: string, view: ViewKey, replyToId?: string, mentionIds?: string[]) => {
         if (!user) return
         const privKeyB64 = localStorage.getItem('e2ee_private_key')
         if (!privKeyB64) throw new Error('缺少私钥')
@@ -323,9 +365,9 @@ export const Chat = () => {
         }
 
         if (view.type === 'channel') {
-            await messageApi.sendGroupMessage(view.id, encryptedBlob, user.id, recipientKeys, nonce)
+            await messageApi.sendGroupMessage(view.id, encryptedBlob, user.id, recipientKeys, nonce, replyToId, mentionIds)
         } else {
-            await messageApi.sendDM(view.uid, encryptedBlob, user.id, recipientKeys, nonce)
+            await messageApi.sendDM(view.uid, encryptedBlob, user.id, recipientKeys, nonce, replyToId, mentionIds)
         }
     }
 
@@ -376,11 +418,26 @@ export const Chat = () => {
         e.preventDefault()
         if (!input.trim() || loading || keysStatus !== 'ready') return
         setLoading(true)
-        const textToSend = replyTo
-            ? `[回复 ${replyTo.sender}]: ${input.trim()}`
-            : input.trim()
+        const textToSend = input.trim()
+
+        // Extract @mentions from text and resolve to user IDs
+        const mentionedUserIds: string[] = []
+        const mentionMatches = [...textToSend.matchAll(/@(\S+)/g)]
+        for (const match of mentionMatches) {
+            const mentionName = match[1].replace(/[^\w\u4e00-\u9fa5]/g, '')
+            const entry = Object.entries(userDirectory).find(
+                ([, info]) => info.name.toLowerCase() === mentionName.toLowerCase()
+            )
+            if (entry) mentionedUserIds.push(entry[0])
+        }
+
         try {
-            await encryptAndSend(textToSend, currentView)
+            await encryptAndSend(
+                textToSend,
+                currentView,
+                replyTo?.id,
+                mentionedUserIds.length > 0 ? mentionedUserIds : undefined
+            )
             // Minimal optimistic UI or clear input
         } catch (err) {
             console.error('发送消息失败', err)
@@ -732,7 +789,8 @@ export const Chat = () => {
 
                                         <div className={`inline-block px-3 py-2 rounded-2xl text-sm max-w-[75%] text-left break-words
                                             ${msg.isMe ? 'bg-indigo-600 text-white rounded-tr-sm' : 'bg-slate-800 text-slate-200 rounded-tl-sm'}
-                                            ${!msg.isDecrypted ? 'opacity-60 italic' : ''}`}
+                                            ${!msg.isDecrypted ? 'opacity-60 italic' : ''}
+                                            ${!msg.isMe && msg.mentions?.includes(user.id) ? 'ring-1 ring-yellow-400/60' : ''}`}
                                         >
                                             {fileMatch ? (
                                                 (() => {
