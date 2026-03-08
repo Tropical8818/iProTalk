@@ -83,6 +83,11 @@ export const Chat = () => {
     const [showCreateChannel, setShowCreateChannel] = useState(false)
     const [hoveredMsg, setHoveredMsg] = useState<string | null>(null)
 
+    // --- Mention ---
+    const [mentionQuery, setMentionQuery] = useState<string | null>(null)
+    const [mentionIndex, setMentionIndex] = useState(0)
+    const inputRef = useRef<HTMLTextAreaElement>(null)
+
     // --- 新增状态 ---
     const [emojiPickerFor, setEmojiPickerFor] = useState<string | null>(null)
     const [reactions, setReactions] = useState<Map<string, Reaction[]>>(new Map())
@@ -293,11 +298,13 @@ export const Chat = () => {
             : input.trim()
         try {
             await encryptAndSend(textToSend, currentView)
-            setInput('')
-            setReplyTo(null)
+            // Minimal optimistic UI or clear input
         } catch (err) {
             console.error('发送消息失败', err)
         } finally {
+            setInput('')
+            setReplyTo(null)
+            setMentionQuery(null)
             setLoading(false)
         }
     }
@@ -387,6 +394,45 @@ export const Chat = () => {
     const viewTitle = currentView.type === 'channel'
         ? `#${currentView.id}`
         : currentView.name
+
+    const filteredUsers = mentionQuery !== null
+        ? Object.values(userDirectory).filter(u => u.name.toLowerCase().includes(mentionQuery))
+        : []
+
+    const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        const val = e.target.value
+        setInput(val)
+        const cursor = e.target.selectionStart
+        const textBeforeCursor = val.slice(0, cursor)
+        const match = textBeforeCursor.match(/(^|\s)@(\S*)$/)
+        if (match) {
+            setMentionQuery(match[2].toLowerCase())
+            setMentionIndex(0)
+        } else {
+            setMentionQuery(null)
+        }
+    }
+
+    const insertMention = (name: string) => {
+        if (!inputRef.current) return
+        const cursor = inputRef.current.selectionStart
+        const textBeforeCursor = input.slice(0, cursor)
+        const textAfterCursor = input.slice(cursor)
+        const match = textBeforeCursor.match(/(^|\s)@(\S*)$/)
+        if (match) {
+            const beforeMention = textBeforeCursor.slice(0, match.index! + match[1].length)
+            const newText = beforeMention + `@${name} ` + textAfterCursor
+            setInput(newText)
+            setMentionQuery(null)
+            setTimeout(() => {
+                if (inputRef.current) {
+                    inputRef.current.focus()
+                    const newCursor = beforeMention.length + name.length + 2
+                    inputRef.current.setSelectionRange(newCursor, newCursor)
+                }
+            }, 0)
+        }
+    }
 
     if (!user) return null
 
@@ -615,7 +661,7 @@ export const Chat = () => {
                                             ) : (
                                                 <div className="w-full break-words leading-relaxed [&_a]:text-blue-300 [&_a]:underline [&_pre]:bg-slate-900 [&_pre]:p-2 [&_pre]:rounded [&_code]:font-mono [&_code]:bg-slate-900/50 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_p]:my-1 [&_ul]:list-disc [&_ul]:ml-5 [&_ol]:list-decimal [&_ol]:ml-5 [&_blockquote]:border-l-4 [&_blockquote]:border-slate-500 [&_blockquote]:pl-3 [&_blockquote]:italic">
                                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                        {msg.text}
+                                                        {msg.text.replace(new RegExp(`(@${user.name}\\b)`, 'gi'), '**$1**')}
                                                     </ReactMarkdown>
                                                 </div>
                                             )}
@@ -705,7 +751,37 @@ export const Chat = () => {
                             </button>
                         </div>
                     )}
-                    <form onSubmit={handleSubmit} className="flex items-end gap-2 bg-slate-800 rounded-xl px-3 py-2 border border-slate-700 focus-within:border-indigo-500 transition-colors">
+                    {/* Mentions Popup */}
+                    <AnimatePresence>
+                        {mentionQuery !== null && filteredUsers.length > 0 && (
+                            <motion.div
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.95 }}
+                                className="absolute bottom-full mb-2 bg-slate-800 border border-slate-700 rounded-xl shadow-xl w-64 max-h-48 overflow-y-auto z-10 p-1"
+                            >
+                                <div className="text-xs font-semibold text-slate-500 uppercase px-2 py-1 mb-1">
+                                    提及人员
+                                </div>
+                                {filteredUsers.map((u, i) => (
+                                    <button
+                                        key={u.publicKey}
+                                        type="button"
+                                        onClick={() => insertMention(u.name)}
+                                        onMouseEnter={() => setMentionIndex(i)}
+                                        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left transition-colors ${i === mentionIndex ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}
+                                    >
+                                        <div className="w-6 h-6 rounded-full bg-slate-700 font-bold flex items-center justify-center shrink-0 text-white">
+                                            {u.name[0]?.toUpperCase()}
+                                        </div>
+                                        <span className="truncate">{u.name}</span>
+                                    </button>
+                                ))}
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    <form onSubmit={handleSubmit} className="flex items-end gap-2 bg-slate-800 rounded-xl px-3 py-2 border border-slate-700 focus-within:border-indigo-500 transition-colors relative">
                         <button
                             type="button"
                             onClick={() => fileInputRef.current?.click()}
@@ -717,13 +793,32 @@ export const Chat = () => {
                         <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
 
                         <textarea
+                            ref={inputRef}
                             rows={1}
                             placeholder={keysStatus === 'ready' ? `发送消息到 ${viewTitle}（端对端加密）` : keysStatusText}
                             className="flex-1 bg-transparent text-white placeholder-slate-500 outline-none resize-none self-center text-sm leading-relaxed max-h-32"
                             value={input}
                             disabled={loading || keysStatus !== 'ready'}
-                            onChange={(e) => setInput(e.target.value)}
+                            onChange={handleInput}
                             onKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+                                if (mentionQuery !== null && filteredUsers.length > 0) {
+                                    if (e.key === 'ArrowUp') {
+                                        e.preventDefault()
+                                        setMentionIndex(prev => (prev > 0 ? prev - 1 : filteredUsers.length - 1))
+                                        return
+                                    } else if (e.key === 'ArrowDown') {
+                                        e.preventDefault()
+                                        setMentionIndex(prev => (prev < filteredUsers.length - 1 ? prev + 1 : 0))
+                                        return
+                                    } else if (e.key === 'Enter' || e.key === 'Tab') {
+                                        e.preventDefault()
+                                        insertMention(filteredUsers[mentionIndex].name)
+                                        return
+                                    } else if (e.key === 'Escape') {
+                                        setMentionQuery(null)
+                                        return
+                                    }
+                                }
                                 if (e.key === 'Enter' && !e.shiftKey) {
                                     e.preventDefault()
                                     handleSubmit(e as unknown as React.FormEvent)
