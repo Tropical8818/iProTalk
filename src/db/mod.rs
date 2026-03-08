@@ -76,6 +76,14 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
             content TEXT NOT NULL,
             pinned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
+        "CREATE TABLE IF NOT EXISTS invite_links (
+            code TEXT PRIMARY KEY NOT NULL,
+            created_by TEXT NOT NULL,
+            max_uses INTEGER NOT NULL DEFAULT -1,
+            used_count INTEGER NOT NULL DEFAULT 0,
+            expires_at DATETIME,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
     ];
 
     for stmt in additive_migrations {

@@ -27,6 +27,7 @@ import ForwardModal from './ForwardModal'
 import MessageSearch from './MessageSearch'
 import FileMessage from './FileMessage'
 import AnnouncementBanner from './AnnouncementBanner'
+import { requestNotificationPermission, sendDesktopNotification, setUnreadBadge, resetTitle } from '../lib/notifications'
 
 // ===== 类型 =====
 interface Message {
@@ -110,6 +111,8 @@ export const Chat = () => {
     const [forwardContent, setForwardContent] = useState<string | null>(null)
     // --- Pinned messages ---
     const [pinnedMsgIds, setPinnedMsgIds] = useState<Set<string>>(new Set())
+    // --- Unread count ---
+    const [, setUnreadCount] = useState(0)
 
     const scrollRef = useRef<HTMLDivElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
@@ -151,6 +154,8 @@ export const Chat = () => {
             setUserDirectory(dir)
             setKeysStatus('ready')
             setKeysStatusText('E2EE 就绪')
+            // Request browser notification permission
+            requestNotificationPermission()
         } catch (e) {
             console.error(e)
             setKeysStatus('error')
@@ -222,6 +227,13 @@ export const Chat = () => {
         if (keysStatus === 'ready') loadHistory(currentView)
     }, [keysStatus, currentView]) // eslint-disable-line
 
+    // Reset unread badge on window focus
+    useEffect(() => {
+        const handleFocus = () => { setUnreadCount(0); resetTitle() }
+        window.addEventListener('focus', handleFocus)
+        return () => window.removeEventListener('focus', handleFocus)
+    }, [])
+
     // ===== 订阅实时消息 =====
     useEffect(() => {
         if (keysStatus !== 'ready' || !user) return
@@ -270,6 +282,17 @@ export const Chat = () => {
                 if (prev.some(m => m.id === newMsg.id)) return prev
                 return [...prev, newMsg]
             })
+
+            // Desktop notification for messages from others
+            if (p.sender_id !== user.id) {
+                const senderName = userDirectory[p.sender_id]?.name || p.sender_id.slice(0, 8)
+                sendDesktopNotification(senderName, text.slice(0, 100))
+                setUnreadCount(c => {
+                    const next = c + 1
+                    setUnreadBadge(next)
+                    return next
+                })
+            }
         })
 
         return () => unsub()
