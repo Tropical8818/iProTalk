@@ -1,5 +1,5 @@
 use poem::{web::Data, Result, error::InternalServerError};
-use poem_openapi::{OpenApi, payload::Json, param::{Path, Query, Header}, Object};
+use poem_openapi::{OpenApi, payload::Json, param::{Path, Header}, Object};
 use serde::{Deserialize, Serialize};
 use crate::{db::AppState, api::utils::decode_user_id_from_token};
 use uuid::Uuid;
@@ -14,6 +14,7 @@ pub struct ChannelResponse {
     pub name: String,
     pub description: String,
     pub is_public: bool,
+    pub announcement: String,
     pub created_by: String,
     pub created_at: i64,
 }
@@ -31,6 +32,18 @@ pub struct UpdateChannelReq {
     pub description: Option<String>,
 }
 
+#[derive(Debug, Object, Serialize, Deserialize)]
+pub struct ChannelMember {
+    pub user_id: String,
+    pub name: String,
+    pub role: String,
+}
+
+#[derive(Debug, Object, Deserialize)]
+pub struct SetAnnouncementReq {
+    pub announcement: String,
+}
+
 #[OpenApi]
 impl ChannelsApi {
     #[oai(path = "/channels", method = "get")]
@@ -40,10 +53,9 @@ impl ChannelsApi {
         #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
     ) -> Result<Json<Vec<ChannelResponse>>> {
         let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
-        // Should validate token here but allowing read for now
-        
+
         let rows = sqlx::query(
-            "SELECT id, name, description, is_public, created_by, strftime('%s', created_at) as created_at FROM channels"
+            "SELECT id, name, description, is_public, COALESCE(announcement, '') as announcement, created_by, strftime('%s', created_at) as created_at FROM channels"
         )
         .fetch_all(&state.sql_pool)
         .await
@@ -57,6 +69,7 @@ impl ChannelsApi {
                 name: row.get("name"),
                 description: row.get("description"),
                 is_public: row.get("is_public"),
+                announcement: row.get("announcement"),
                 created_by: row.get("created_by"),
                 created_at: created_at.parse().unwrap_or(0),
             });
@@ -92,11 +105,17 @@ impl ChannelsApi {
         .await
         .map_err(InternalServerError)?;
 
+        // Auto-join creator as owner
+        sqlx::query("INSERT OR IGNORE INTO group_members (group_id, user_id, role) VALUES (?, ?, 'owner')")
+            .bind(&cid).bind(&user_id)
+            .execute(&state.sql_pool).await.ok();
+
         Ok(Json(ChannelResponse {
             id: cid,
             name: req.0.name,
             description,
             is_public,
+            announcement: String::new(),
             created_by: user_id,
             created_at: chrono::Utc::now().timestamp(),
         }))
@@ -145,5 +164,110 @@ impl ChannelsApi {
             .execute(&state.sql_pool).await.map_err(InternalServerError)?;
 
         Ok(Json("Deleted".to_string()))
+    }
+
+    /// 获取频道成员列表
+    #[oai(path = "/channels/:id/members", method = "get")]
+    async fn get_channel_members(
+        &self,
+        state: Data<&AppState>,
+        id: Path<String>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<Vec<ChannelMember>>> {
+        let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+
+        let rows = sqlx::query(
+            "SELECT gm.user_id, u.name, gm.role FROM group_members gm JOIN users u ON gm.user_id = u.id WHERE gm.group_id = ?"
+        )
+        .bind(&id.0)
+        .fetch_all(&state.sql_pool)
+        .await
+        .map_err(InternalServerError)?;
+
+        let members: Vec<ChannelMember> = rows.iter().map(|r| ChannelMember {
+            user_id: r.get("user_id"),
+            name: r.get("name"),
+            role: r.get("role"),
+        }).collect();
+
+        Ok(Json(members))
+    }
+
+    /// 加入频道
+    #[oai(path = "/channels/:id/join", method = "post")]
+    async fn join_channel(
+        &self,
+        state: Data<&AppState>,
+        id: Path<String>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        let user_id = decode_user_id_from_token(&token)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        sqlx::query("INSERT OR IGNORE INTO group_members (group_id, user_id, role) VALUES (?, ?, 'member')")
+            .bind(&id.0).bind(&user_id)
+            .execute(&state.sql_pool).await.map_err(InternalServerError)?;
+
+        Ok(Json("Joined".to_string()))
+    }
+
+    /// 离开频道
+    #[oai(path = "/channels/:id/leave", method = "post")]
+    async fn leave_channel(
+        &self,
+        state: Data<&AppState>,
+        id: Path<String>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        let user_id = decode_user_id_from_token(&token)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        sqlx::query("DELETE FROM group_members WHERE group_id = ? AND user_id = ?")
+            .bind(&id.0).bind(&user_id)
+            .execute(&state.sql_pool).await.map_err(InternalServerError)?;
+
+        Ok(Json("Left".to_string()))
+    }
+
+    /// 设置频道公告
+    #[oai(path = "/channels/:id/announcement", method = "put")]
+    async fn set_announcement(
+        &self,
+        state: Data<&AppState>,
+        id: Path<String>,
+        req: Json<SetAnnouncementReq>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        let _user_id = decode_user_id_from_token(&token)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        sqlx::query("UPDATE channels SET announcement = ? WHERE id = ?")
+            .bind(&req.0.announcement).bind(&id.0)
+            .execute(&state.sql_pool).await.map_err(InternalServerError)?;
+
+        Ok(Json("Announcement updated".to_string()))
+    }
+
+    /// 获取频道公告
+    #[oai(path = "/channels/:id/announcement", method = "get")]
+    async fn get_announcement(
+        &self,
+        state: Data<&AppState>,
+        id: Path<String>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+
+        let row = sqlx::query("SELECT COALESCE(announcement, '') as announcement FROM channels WHERE id = ?")
+            .bind(&id.0)
+            .fetch_optional(&state.sql_pool)
+            .await
+            .map_err(InternalServerError)?;
+
+        let announcement = row.map(|r| r.get::<String, _>("announcement")).unwrap_or_default();
+        Ok(Json(announcement))
     }
 }

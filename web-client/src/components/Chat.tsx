@@ -25,6 +25,8 @@ import remarkGfm from 'remark-gfm'
 import ContextMenu from './ContextMenu'
 import ForwardModal from './ForwardModal'
 import MessageSearch from './MessageSearch'
+import FileMessage from './FileMessage'
+import AnnouncementBanner from './AnnouncementBanner'
 
 // ===== 类型 =====
 interface Message {
@@ -632,6 +634,14 @@ export const Chat = () => {
                     </div>
                 </header>
 
+                {/* 公告横幅 */}
+                {currentView.type === 'channel' && (
+                    (() => {
+                        const ch = remoteChannels.find((c: { id: string }) => c.id === (currentView as { id: string }).id) as { announcement?: string } | undefined
+                        return ch?.announcement ? <AnnouncementBanner text={ch.announcement} /> : null
+                    })()
+                )}
+
                 {/* 消息列表 */}
                 <main ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-1">
                     {historyLoading && (
@@ -707,17 +717,7 @@ export const Chat = () => {
                                                     return isImageUrl(fileUrl) ? (
                                                         <ImagePreview src={fileUrl} alt={fileName} />
                                                     ) : (
-                                                        <div className="flex items-center gap-2">
-                                                            <Paperclip className="w-4 h-4 shrink-0" />
-                                                            <a
-                                                                href={fileUrl}
-                                                                target="_blank"
-                                                                rel="noreferrer"
-                                                                className="underline underline-offset-2 hover:opacity-80"
-                                                            >
-                                                                {fileName || '下载文件'}
-                                                            </a>
-                                                        </div>
+                                                        <FileMessage fileName={fileName} fileUrl={fileUrl} />
                                                     )
                                                 })()
                                             ) : editingMsgId === msg.id ? (

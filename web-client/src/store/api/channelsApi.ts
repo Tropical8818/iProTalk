@@ -29,6 +29,31 @@ export const channelsApi = baseApi.injectEndpoints({
             }),
             invalidatesTags: ['Channel'],
         }),
+        getChannelMembers: builder.query({
+            query: (id: string) => `/channels/${id}/members`,
+        }),
+        joinChannel: builder.mutation({
+            query: (id: string) => ({
+                url: `/channels/${id}/join`,
+                method: 'POST',
+            }),
+        }),
+        leaveChannel: builder.mutation({
+            query: (id: string) => ({
+                url: `/channels/${id}/leave`,
+                method: 'POST',
+            }),
+        }),
+        setAnnouncement: builder.mutation({
+            query: ({ id, announcement }: { id: string; announcement: string }) => ({
+                url: `/channels/${id}/announcement`,
+                method: 'PUT',
+                body: { announcement },
+            }),
+        }),
+        getAnnouncement: builder.query({
+            query: (id: string) => `/channels/${id}/announcement`,
+        }),
     }),
 });
 
@@ -37,4 +62,9 @@ export const {
     useCreateChannelMutation,
     useUpdateChannelMutation,
     useDeleteChannelMutation,
+    useGetChannelMembersQuery,
+    useJoinChannelMutation,
+    useLeaveChannelMutation,
+    useSetAnnouncementMutation,
+    useGetAnnouncementQuery,
 } = channelsApi;
