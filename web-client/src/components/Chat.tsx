@@ -11,13 +11,17 @@ import {
 import { useSelector } from 'react-redux'
 import { RootState } from '../store'
 import { useUploadFileChunkMutation, usePrepareFileMutation } from '../store/api/filesApi'
+import { useGetChannelsQuery } from '../store/api/channelsApi'
 import UserSettingsModal from './UserSettingsModal'
 import UserSearchModal from './UserSearchModal'
 import EmojiPicker from './EmojiPicker'
 import MessageReaction, { type Reaction } from './MessageReaction'
 import ImagePreview from './ImagePreview'
 import MessageReply, { type ReplyInfo } from './MessageReply'
+import ChannelCreateModal from './ChannelCreateModal'
 import { useInView } from '../lib/useInView'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 // ===== 类型 =====
 interface Message {
@@ -76,6 +80,7 @@ export const Chat = () => {
     const [keysStatusText, setKeysStatusText] = useState('初始化E2EE中...')
     const [showSettings, setShowSettings] = useState(false)
     const [showSearch, setShowSearch] = useState(false)
+    const [showCreateChannel, setShowCreateChannel] = useState(false)
     const [hoveredMsg, setHoveredMsg] = useState<string | null>(null)
 
     // --- 新增状态 ---
@@ -89,6 +94,8 @@ export const Chat = () => {
 
     const [prepareFile] = usePrepareFileMutation()
     const [uploadFileChunk] = useUploadFileChunkMutation()
+
+    const { data: remoteChannels = [] } = useGetChannelsQuery(undefined, { skip: keysStatus !== 'ready' })
 
     // --- 用户目录（公钥+名字） ---
     const [userDirectory, setUserDirectory] = useState<Record<string, UserInfo>>({})
@@ -347,9 +354,9 @@ export const Chat = () => {
         // Fire-and-forget API call; ignore errors silently for optimistic UX
         const myReaction = (reactions.get(msgId) ?? []).find(r => r.emoji === emoji)
         if (myReaction?.isMine) {
-            reactionApi.removeReaction(msgId, emoji).catch(() => {})
+            reactionApi.removeReaction(msgId, emoji).catch(() => { })
         } else {
-            reactionApi.addReaction(msgId, emoji).catch(() => {})
+            reactionApi.addReaction(msgId, emoji).catch(() => { })
         }
     }
 
@@ -366,7 +373,7 @@ export const Chat = () => {
             return next
         })
         // Best-effort API call
-        messageApi.markRead(msgId).catch(() => {})
+        messageApi.markRead(msgId).catch(() => { })
     }, [])
 
     const openDM = (uid: string, name: string) => {
@@ -397,18 +404,24 @@ export const Chat = () => {
 
                 <div className="flex-1 overflow-y-auto py-3 space-y-1">
                     {/* 频道列表 */}
-                    <div className="px-3 mb-1">
+                    <div className="px-3 mb-1 flex items-center justify-between">
                         <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">频道</span>
+                        <button onClick={() => setShowCreateChannel(true)} className="text-slate-500 hover:text-white transition-colors" title="创建频道">
+                            <Plus className="w-4 h-4" />
+                        </button>
                     </div>
-                    <button
-                        onClick={() => setCurrentView({ type: 'channel', id: 'general' })}
-                        className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-md mx-1 text-sm transition-colors ${currentView.type === 'channel' && currentView.id === 'general'
-                            ? 'bg-indigo-600/30 text-white'
-                            : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
-                    >
-                        <Hash className="w-4 h-4 shrink-0" />
-                        <span>general</span>
-                    </button>
+                    {[{ id: 'general', name: 'general' }, ...remoteChannels.map((c: { id: string, name: string }) => ({ id: c.name, name: c.name }))].filter((v, i, a) => a.findIndex(t => t.id === v.id) === i).map(c => (
+                        <button
+                            key={c.id}
+                            onClick={() => setCurrentView({ type: 'channel', id: c.id })}
+                            className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-md mx-1 text-sm transition-colors ${currentView.type === 'channel' && currentView.id === c.id
+                                ? 'bg-indigo-600/30 text-white'
+                                : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+                        >
+                            <Hash className="w-4 h-4 shrink-0" />
+                            <span className="truncate">{c.name}</span>
+                        </button>
+                    ))}
 
                     {/* 私信列表 */}
                     <div className="px-3 mt-4 mb-1 flex items-center justify-between">
@@ -600,7 +613,11 @@ export const Chat = () => {
                                                     )
                                                 })()
                                             ) : (
-                                                <p className="leading-relaxed">{msg.text}</p>
+                                                <div className="w-full break-words leading-relaxed [&_a]:text-blue-300 [&_a]:underline [&_pre]:bg-slate-900 [&_pre]:p-2 [&_pre]:rounded [&_code]:font-mono [&_code]:bg-slate-900/50 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_p]:my-1 [&_ul]:list-disc [&_ul]:ml-5 [&_ol]:list-decimal [&_ol]:ml-5 [&_blockquote]:border-l-4 [&_blockquote]:border-slate-500 [&_blockquote]:pl-3 [&_blockquote]:italic">
+                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                        {msg.text}
+                                                    </ReactMarkdown>
+                                                </div>
                                             )}
                                         </div>
 
@@ -733,6 +750,7 @@ export const Chat = () => {
 
             {/* ===== 弹窗 ===== */}
             {showSettings && <UserSettingsModal onClose={() => setShowSettings(false)} />}
+            {showCreateChannel && <ChannelCreateModal onClose={() => setShowCreateChannel(false)} />}
             {showSearch && (
                 <UserSearchModal
                     onClose={() => setShowSearch(false)}
