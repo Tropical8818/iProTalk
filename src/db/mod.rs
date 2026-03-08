@@ -68,6 +68,14 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
         "ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN is_banned BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN e2ee_initialized BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE channels ADD COLUMN announcement TEXT NOT NULL DEFAULT ''",
+        "CREATE TABLE IF NOT EXISTS pinned_messages (
+            id TEXT PRIMARY KEY NOT NULL,
+            channel_id TEXT,
+            pinned_by TEXT NOT NULL,
+            content TEXT NOT NULL,
+            pinned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
     ];
 
     for stmt in additive_migrations {

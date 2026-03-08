@@ -35,6 +35,14 @@ export interface StoredMessage {
     }
 }
 
+export interface PinnedMessage {
+    id: string
+    channel_id: string | null
+    pinned_by: string
+    content: string
+    pinned_at: string
+}
+
 export const authApi = {
     register: (data: Record<string, unknown>) => api.post<AuthResponse>('/auth/register', data),
     login: (data: Record<string, unknown>) => api.post<AuthResponse>('/auth/login', data),
@@ -89,7 +97,26 @@ export const messageApi = {
     }) => api.put(`/messages/${mid}/edit`, payload),
 
     markRead: (messageId: string) => api.post(`/messages/${messageId}/read`),
+
+    pinMessage: (messageId: string, channelId: string | null, content: string) =>
+        api.post('/messages/pin', { message_id: messageId, channel_id: channelId, content }),
+
+    unpinMessage: (messageId: string) => api.delete(`/messages/pin/${messageId}`),
+
+    getPinnedMessages: (channelId: string) =>
+        api.get<PinnedMessage[]>(`/messages/pin/channel/${channelId}`),
+
+    forwardMessage: (content: string, targetChannelId?: string, targetUserId?: string) =>
+        api.post<string>('/messages/forward', {
+            content,
+            target_channel_id: targetChannelId ?? null,
+            target_user_id: targetUserId ?? null,
+        }),
+
+    searchMessages: (q: string, channelId?: string, limit = 30) =>
+        api.get<StoredMessage[]>('/messages/search', { params: { q, channel_id: channelId, limit } }),
 }
+
 
 export const reactionApi = {
     addReaction: (messageId: string, emoji: string) =>

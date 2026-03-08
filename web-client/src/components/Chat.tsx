@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Hash, Users, MessageSquare, KeyRound, Settings, Paperclip, Plus, Search, Trash2, Reply, Smile, X, Edit3, Check } from 'lucide-react'
+import { Send, Hash, Users, MessageSquare, KeyRound, Settings, Paperclip, Plus, Search, Trash2, Reply, Smile, X, Edit3, Check, MoreVertical, Pin } from 'lucide-react'
 import { messageApi, reactionApi, subscribeToEvents, keyApi, usersApi, type StoredMessage } from '../api'
 import {
     generateKeyPair, exportPrivateKey, exportPublicKey,
@@ -22,6 +22,9 @@ import ChannelCreateModal from './ChannelCreateModal'
 import { useInView } from '../lib/useInView'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import ContextMenu from './ContextMenu'
+import ForwardModal from './ForwardModal'
+import MessageSearch from './MessageSearch'
 
 // ===== 类型 =====
 interface Message {
@@ -80,6 +83,7 @@ export const Chat = () => {
     const [keysStatusText, setKeysStatusText] = useState('初始化E2EE中...')
     const [showSettings, setShowSettings] = useState(false)
     const [showSearch, setShowSearch] = useState(false)
+    const [showMsgSearch, setShowMsgSearch] = useState(false)
     const [showCreateChannel, setShowCreateChannel] = useState(false)
     const [hoveredMsg, setHoveredMsg] = useState<string | null>(null)
 
@@ -97,6 +101,13 @@ export const Chat = () => {
     const [reactions, setReactions] = useState<Map<string, Reaction[]>>(new Map())
     const [readMap, setReadMap] = useState<Map<string, boolean>>(new Map())
     const [replyTo, setReplyTo] = useState<ReplyInfo | null>(null)
+
+    // --- ContextMenu ---
+    const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; msgId: string; text: string; isPinned: boolean; isMine: boolean } | null>(null)
+    // --- Forward ---
+    const [forwardContent, setForwardContent] = useState<string | null>(null)
+    // --- Pinned messages ---
+    const [pinnedMsgIds, setPinnedMsgIds] = useState<Set<string>>(new Set())
 
     const scrollRef = useRef<HTMLDivElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
@@ -612,10 +623,10 @@ export const Chat = () => {
                         </span>
                     </div>
                     <div className="flex items-center gap-2">
-                        <button onClick={() => setShowSearch(true)} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all" title="搜索用户">
+                        <button onClick={() => setShowMsgSearch(true)} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all" title="搜索消息">
                             <Search className="w-4 h-4" />
                         </button>
-                        <button className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all" title="成员列表">
+                        <button onClick={() => setShowSearch(true)} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all" title="查找用户">
                             <Users className="w-4 h-4" />
                         </button>
                     </div>
@@ -657,6 +668,10 @@ export const Chat = () => {
                                     className={`group relative flex items-start gap-3 px-2 py-0.5 rounded-lg hover:bg-slate-900/50 ${msg.isMe ? 'flex-row-reverse' : ''} ${showHeader ? 'mt-3' : 'mt-0.5'}`}
                                     onMouseEnter={() => setHoveredMsg(msg.id)}
                                     onMouseLeave={() => { setHoveredMsg(null); setEmojiPickerFor(null) }}
+                                    onContextMenu={(e) => {
+                                        e.preventDefault()
+                                        setCtxMenu({ x: e.clientX, y: e.clientY, msgId: msg.id, text: msg.text, isPinned: pinnedMsgIds.has(msg.id), isMine: msg.isMe })
+                                    }}
                                 >
                                     {/* 头像 */}
                                     {showHeader ? (
@@ -792,6 +807,33 @@ export const Chat = () => {
                                                     title="回复"
                                                 >
                                                     <Reply className="w-3.5 h-3.5" />
+                                                </button>
+
+                                                {/* Pin button */}
+                                                <button
+                                                    onClick={() => {
+                                                        const channelId = currentView.type === 'channel' ? currentView.id : null
+                                                        if (pinnedMsgIds.has(msg.id)) {
+                                                            messageApi.unpinMessage(msg.id)
+                                                            setPinnedMsgIds(prev => { const s = new Set(prev); s.delete(msg.id); return s })
+                                                        } else {
+                                                            messageApi.pinMessage(msg.id, channelId, msg.text)
+                                                            setPinnedMsgIds(prev => new Set([...prev, msg.id]))
+                                                        }
+                                                    }}
+                                                    className={`p-1.5 rounded transition-colors ${pinnedMsgIds.has(msg.id) ? 'text-yellow-400 hover:text-yellow-300' : 'text-slate-400 hover:text-yellow-400'}`}
+                                                    title={pinnedMsgIds.has(msg.id) ? '取消置顶' : '置顶'}
+                                                >
+                                                    <Pin className="w-3.5 h-3.5" />
+                                                </button>
+
+                                                {/* Forward button */}
+                                                <button
+                                                    onClick={() => setForwardContent(msg.text)}
+                                                    className="p-1.5 text-slate-400 hover:text-green-400 rounded transition-colors"
+                                                    title="转发"
+                                                >
+                                                    <MoreVertical className="w-3.5 h-3.5" />
                                                 </button>
 
                                                 {msg.isMe && !fileMatch && msg.isDecrypted && (
@@ -932,6 +974,53 @@ export const Chat = () => {
                 <UserSearchModal
                     onClose={() => setShowSearch(false)}
                     onStartDM={(uid, name) => { openDM(uid, name); setShowSearch(false) }}
+                />
+            )}
+            {showMsgSearch && (
+                <MessageSearch
+                    channelId={currentView.type === 'channel' ? currentView.id : undefined}
+                    onClose={() => setShowMsgSearch(false)}
+                />
+            )}
+            {forwardContent !== null && (
+                <ForwardModal
+                    content={forwardContent}
+                    channels={remoteChannels.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }))}
+                    contacts={contacts.map(c => ({ user_id: c.uid, name: c.name }))}
+                    onClose={() => setForwardContent(null)}
+                />
+            )}
+            {ctxMenu && (
+                <ContextMenu
+                    x={ctxMenu.x}
+                    y={ctxMenu.y}
+                    visible={true}
+                    isPinned={ctxMenu.isPinned}
+                    isMine={ctxMenu.isMine}
+                    onClose={() => setCtxMenu(null)}
+                    onReply={() => {
+                        const msg = messages.find(m => m.id === ctxMenu.msgId)
+                        if (msg) setReplyTo({ id: msg.id, sender: msg.sender, text: msg.text })
+                        setCtxMenu(null)
+                    }}
+                    onEdit={ctxMenu.isMine ? () => {
+                        const msg = messages.find(m => m.id === ctxMenu.msgId)
+                        if (msg) { setEditingMsgId(msg.id); setEditInput(msg.text) }
+                        setCtxMenu(null)
+                    } : undefined}
+                    onForward={() => { setForwardContent(ctxMenu.text); setCtxMenu(null) }}
+                    onPin={() => {
+                        const cid = currentView.type === 'channel' ? currentView.id : null
+                        messageApi.pinMessage(ctxMenu.msgId, cid, ctxMenu.text)
+                        setPinnedMsgIds(prev => new Set([...prev, ctxMenu.msgId]))
+                        setCtxMenu(null)
+                    }}
+                    onUnpin={() => {
+                        messageApi.unpinMessage(ctxMenu.msgId)
+                        setPinnedMsgIds(prev => { const s = new Set(prev); s.delete(ctxMenu.msgId); return s })
+                        setCtxMenu(null)
+                    }}
+                    onDelete={ctxMenu.isMine ? () => { handleDeleteMessage(ctxMenu.msgId); setCtxMenu(null) } : undefined}
                 />
             )}
         </div>

@@ -7,6 +7,38 @@ use uuid::Uuid;
 use poem::web::sse::Event;
 use serde::{Deserialize, Serialize};
 use poem_openapi::Object;
+use sqlx::Row;
+
+#[derive(Debug, Object, Serialize, Deserialize, Clone)]
+pub struct PinnedMessage {
+    pub id: String,
+    pub channel_id: Option<String>,
+    pub pinned_by: String,
+    pub content: String,
+    pub pinned_at: String,
+}
+
+#[derive(Debug, Object, Deserialize)]
+pub struct PinRequest {
+    pub message_id: String,
+    pub channel_id: Option<String>,
+    pub content: String, // serialized JSON of original message
+}
+
+#[derive(Debug, Object, Deserialize)]
+pub struct ForwardRequest {
+    pub content: String,       // original content text / encrypted blob
+    pub target_channel_id: Option<String>,
+    pub target_user_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    pub q: String,
+    pub channel_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
 
 #[derive(Clone, Default)]
 pub struct MessagesApi;
@@ -203,6 +235,149 @@ impl MessagesApi {
         };
         let _ = state.sender.send(event);
         Ok(Json("Deleted".to_string()))
+    }
+
+    /// 置顶消息（Pin）
+    #[oai(path = "/messages/pin", method = "post")]
+    async fn pin_message(
+        &self,
+        state: Data<&AppState>,
+        req: Json<PinRequest>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        let user_id = decode_user_id_from_token(&token)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        sqlx::query(
+            "INSERT OR REPLACE INTO pinned_messages (id, channel_id, pinned_by, content) VALUES (?, ?, ?, ?)"
+        )
+        .bind(&req.0.message_id)
+        .bind(&req.0.channel_id)
+        .bind(&user_id)
+        .bind(&req.0.content)
+        .execute(&state.sql_pool)
+        .await
+        .map_err(InternalServerError)?;
+
+        Ok(Json("Pinned".to_string()))
+    }
+
+    /// 取消置顶（Unpin）
+    #[oai(path = "/messages/pin/:mid", method = "delete")]
+    async fn unpin_message(
+        &self,
+        state: Data<&AppState>,
+        mid: Path<String>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+
+        sqlx::query("DELETE FROM pinned_messages WHERE id = ?")
+            .bind(&mid.0)
+            .execute(&state.sql_pool)
+            .await
+            .map_err(InternalServerError)?;
+
+        Ok(Json("Unpinned".to_string()))
+    }
+
+    /// 获取频道的置顶消息
+    #[oai(path = "/messages/pin/channel/:cid", method = "get")]
+    async fn get_pinned_messages(
+        &self,
+        state: Data<&AppState>,
+        cid: Path<String>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<Vec<PinnedMessage>>> {
+        let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+
+        let rows = sqlx::query(
+            "SELECT id, channel_id, pinned_by, content, pinned_at FROM pinned_messages WHERE channel_id = ? ORDER BY pinned_at DESC"
+        )
+        .bind(&cid.0)
+        .fetch_all(&state.sql_pool)
+        .await
+        .map_err(InternalServerError)?;
+
+        let pins: Vec<PinnedMessage> = rows.iter().map(|r| PinnedMessage {
+            id: r.get("id"),
+            channel_id: r.try_get("channel_id").ok(),
+            pinned_by: r.get("pinned_by"),
+            content: r.get("content"),
+            pinned_at: r.get::<String, _>("pinned_at"),
+        }).collect();
+
+        Ok(Json(pins))
+    }
+
+    /// 转发消息
+    #[oai(path = "/messages/forward", method = "post")]
+    async fn forward_message(
+        &self,
+        state: Data<&AppState>,
+        req: Json<ForwardRequest>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        let sender_id = decode_user_id_from_token(&token)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        let msg_id = Uuid::new_v4().to_string();
+        let timestamp = chrono::Utc::now().timestamp();
+
+        let payload = MessagePayload {
+            encrypted_blob: req.0.content.clone(),
+            nonce: "forwarded".to_string(),
+            sender_id: sender_id.clone(),
+            group_id: req.0.target_channel_id.clone(),
+            recipient_id: req.0.target_user_id.clone(),
+            recipient_keys: std::collections::HashMap::new(),
+        };
+
+        // Store in sled
+        if let Some(ref cid) = req.0.target_channel_id {
+            let key = format!("group:{}:ts:{:020}:{}", cid, timestamp, msg_id);
+            let stored = crate::api::messages::StoredMessage { id: msg_id.clone(), timestamp, payload: payload.clone() };
+            let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+            state.msg_db.insert(key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        }
+
+        let event = MessageEvent {
+            event_type: "new_message".to_string(),
+            payload,
+            timestamp,
+        };
+        let _ = state.sender.send(event);
+        Ok(Json(msg_id))
+    }
+
+    /// 搜索消息（按关键字在频道中）
+    #[oai(path = "/messages/search", method = "get")]
+    async fn search_messages(
+        &self,
+        state: Data<&AppState>,
+        Query(params): Query<SearchQuery>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<Vec<StoredMessage>>> {
+        let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+
+        let limit = params.limit.unwrap_or(30);
+        let q = params.q.to_lowercase();
+        let prefix = match &params.channel_id {
+            Some(cid) => format!("group:{}:ts:", cid),
+            None => "group:".to_string(),
+        };
+
+        let results: Vec<StoredMessage> = state.msg_db
+            .scan_prefix(prefix.as_bytes())
+            .filter_map(|r| r.ok())
+            .filter_map(|(_, v)| serde_json::from_slice::<StoredMessage>(&v).ok())
+            .filter(|m| m.payload.encrypted_blob.to_lowercase().contains(&q))
+            .take(limit)
+            .collect();
+
+        Ok(Json(results))
     }
 }
 

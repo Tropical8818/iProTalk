@@ -64,7 +64,16 @@ CREATE TABLE IF NOT EXISTS channels (
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     is_public BOOLEAN NOT NULL DEFAULT 1,
+    announcement TEXT NOT NULL DEFAULT '',
     created_by TEXT NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS pinned_messages (
+    id TEXT PRIMARY KEY NOT NULL,      -- message id
+    channel_id TEXT,                   -- null if DM
+    pinned_by TEXT NOT NULL,
+    content TEXT NOT NULL,             -- serialized JSON of the message
+    pinned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
