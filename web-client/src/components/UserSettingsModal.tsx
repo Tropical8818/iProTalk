@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Upload, Shield, LogOut, KeyRound } from 'lucide-react';
+import { X, Upload, Shield, LogOut, KeyRound, Bell, Volume2 } from 'lucide-react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../store';
 import { logout, setCredentials } from '../store/slices/authSlice';
@@ -16,7 +16,7 @@ export default function UserSettingsModal({ onClose }: UserSettingsModalProps) {
     const dispatch = useDispatch();
     const user = useSelector((state: RootState) => state.auth.user);
     const token = useSelector((state: RootState) => state.auth.token);
-    const [activeTab, setActiveTab] = useState<'profile' | 'admin'>('profile');
+    const [activeTab, setActiveTab] = useState<'profile' | 'notifications' | 'admin'>('profile');
 
     const [uploadAvatar, { isLoading: isUploadingAvatar }] = useUploadAvatarMutation();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -32,6 +32,35 @@ export default function UserSettingsModal({ onClose }: UserSettingsModalProps) {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [pwStatus, setPwStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
     const [pwError, setPwError] = useState('');
+
+    // 通知设置
+    const [enableNotifications, setEnableNotifications] = useState(localStorage.getItem('notification_enabled') === 'true');
+    const [enableSound, setEnableSound] = useState(localStorage.getItem('notification_sound') !== 'false');
+
+    const handleToggleNotifications = async () => {
+        if (!enableNotifications) {
+            if ('Notification' in window) {
+                const permission = await Notification.requestPermission();
+                if (permission === 'granted') {
+                    setEnableNotifications(true);
+                    localStorage.setItem('notification_enabled', 'true');
+                } else {
+                    alert('请在浏览器设置中允许通知权限。');
+                }
+            } else {
+                alert('您的浏览器不支持桌面通知。');
+            }
+        } else {
+            setEnableNotifications(false);
+            localStorage.setItem('notification_enabled', 'false');
+        }
+    };
+
+    const handleToggleSound = () => {
+        const newVal = !enableSound;
+        setEnableSound(newVal);
+        localStorage.setItem('notification_sound', newVal ? 'true' : 'false');
+    };
 
     const handleLogout = () => {
         dispatch(logout());
@@ -143,6 +172,15 @@ export default function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                                     <span className="absolute">{user.name.substring(0, 2).toUpperCase()}</span>
                                 </div>
                                 个人资料
+                            </button>
+
+                            <button
+                                onClick={() => setActiveTab('notifications')}
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium text-sm ${activeTab === 'notifications' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                                    }`}
+                            >
+                                <Bell className="w-5 h-5 shrink-0" />
+                                消息通知
                             </button>
 
                             {user.is_admin && (
@@ -279,6 +317,55 @@ export default function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                                             </button>
                                         </form>
                                     </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'notifications' && (
+                                <div className="max-w-lg space-y-6">
+                                    <h3 className="text-xl font-bold text-white">通知设置</h3>
+
+                                    <div className="bg-slate-900 rounded-xl border border-slate-800 p-1">
+                                        <div className="p-4 flex items-center justify-between">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400">
+                                                    <Bell className="w-5 h-5" />
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-medium text-white">桌面消息通知</p>
+                                                    <p className="text-xs text-slate-400">收到新消息时在屏幕右上角提示</p>
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={handleToggleNotifications}
+                                                className={`relative inline-flex h-6 w-10 overflow-hidden rounded-full transition-colors ease-in-out duration-200 focus:outline-none ${enableNotifications ? 'bg-indigo-500' : 'bg-slate-600'}`}
+                                            >
+                                                <span className={`inline-block h-6 w-6 transform rounded-full bg-white transition ease-in-out duration-200 ${enableNotifications ? 'translate-x-4' : 'translate-x-0'}`} />
+                                            </button>
+                                        </div>
+
+                                        <div className="h-px bg-slate-800 mx-4" />
+
+                                        <div className="p-4 flex items-center justify-between">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400">
+                                                    <Volume2 className="w-5 h-5" />
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-medium text-white">消息提示音</p>
+                                                    <p className="text-xs text-slate-400">应用内收到新消息时播放提示音</p>
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={handleToggleSound}
+                                                className={`relative inline-flex h-6 w-10 overflow-hidden rounded-full transition-colors ease-in-out duration-200 focus:outline-none ${enableSound ? 'bg-indigo-500' : 'bg-slate-600'}`}
+                                            >
+                                                <span className={`inline-block h-6 w-6 transform rounded-full bg-white transition ease-in-out duration-200 ${enableSound ? 'translate-x-4' : 'translate-x-0'}`} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-slate-500">
+                                        提示：开启桌面通知前，请确保您的浏览器没有在操作系统层面被屏蔽通知权限。
+                                    </p>
                                 </div>
                             )}
 
