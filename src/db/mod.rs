@@ -42,6 +42,24 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
 
+    // Run OAuth migration (statements separated; ignore duplicate column/index errors)
+    for stmt in include_str!("../../migrations/20260308000001_oauth.sql")
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let _ = sqlx::query(stmt).execute(&sql_pool).await;
+    }
+
+    // Run audit log migration
+    for stmt in include_str!("../../migrations/20260308000002_audit_log.sql")
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let _ = sqlx::query(stmt).execute(&sql_pool).await;
+    }
+
     // Create table for system settings
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS settings (
@@ -100,11 +118,19 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
             assigned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, role, channel_id)
         )",
+        "ALTER TABLE users ADD COLUMN oauth_provider TEXT",
+        "ALTER TABLE users ADD COLUMN oauth_provider_id TEXT",
     ];
 
     for stmt in additive_migrations {
-        // Ignore "duplicate column" errors; the column already exists
-        let _ = sqlx::query(stmt).execute(&sql_pool).await;
+        // Ignore "duplicate column" / "already exists" errors — the object was
+        // created on a previous startup. Log anything else for visibility.
+        if let Err(e) = sqlx::query(stmt).execute(&sql_pool).await {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") && !msg.contains("already exists") {
+                tracing::warn!("Additive migration skipped ({}): {}", &stmt[..stmt.len().min(60)], e);
+            }
+        }
     }
 
     // Initialize Sled
