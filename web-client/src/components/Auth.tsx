@@ -43,7 +43,8 @@ export const Auth = () => {
             // RTK Query unwraps the error into err.data for 400/500 requests automatically
             const error = err as { data?: string | { message?: string } };
             const serverMsg = typeof error.data === 'string' ? error.data : error.data?.message;
-            setError(serverMsg || '登录失败，请检查您的账号和密码')
+            const defaultMsg = isLogin ? '登录失败，请检查您的账号和密码' : '注册失败，可能有重名邮箱或由于系统限制被拒';
+            setError(serverMsg || defaultMsg);
         } finally {
             setLoading(false)
         }
