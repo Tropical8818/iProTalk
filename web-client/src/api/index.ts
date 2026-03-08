@@ -79,6 +79,15 @@ export const messageApi = {
 
     deleteMessage: (mid: string) => api.delete(`/messages/${mid}`),
 
+    editMessage: (mid: string, payload: {
+        encrypted_blob: string
+        nonce: string
+        sender_id: string
+        group_id: string | null
+        recipient_id: string | null
+        recipient_keys: Record<string, string>
+    }) => api.put(`/messages/${mid}/edit`, payload),
+
     markRead: (messageId: string) => api.post(`/messages/${messageId}/read`),
 }
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Hash, Users, MessageSquare, KeyRound, Settings, Paperclip, Plus, Search, Trash2, Reply, Smile, X } from 'lucide-react'
+import { Send, Hash, Users, MessageSquare, KeyRound, Settings, Paperclip, Plus, Search, Trash2, Reply, Smile, X, Edit3, Check } from 'lucide-react'
 import { messageApi, reactionApi, subscribeToEvents, keyApi, usersApi, type StoredMessage } from '../api'
 import {
     generateKeyPair, exportPrivateKey, exportPublicKey,
@@ -82,6 +82,10 @@ export const Chat = () => {
     const [showSearch, setShowSearch] = useState(false)
     const [showCreateChannel, setShowCreateChannel] = useState(false)
     const [hoveredMsg, setHoveredMsg] = useState<string | null>(null)
+
+    // --- Edit ---
+    const [editingMsgId, setEditingMsgId] = useState<string | null>(null)
+    const [editInput, setEditInput] = useState('')
 
     // --- Mention ---
     const [mentionQuery, setMentionQuery] = useState<string | null>(null)
@@ -286,6 +290,49 @@ export const Chat = () => {
             await messageApi.sendGroupMessage(view.id, encryptedBlob, user.id, recipientKeys, nonce)
         } else {
             await messageApi.sendDM(view.uid, encryptedBlob, user.id, recipientKeys, nonce)
+        }
+    }
+
+    const editEncryptedMessage = async (msgId: string, newText: string, view: ViewKey) => {
+        if (!user) return
+        const privKeyB64 = localStorage.getItem('e2ee_private_key')
+        if (!privKeyB64) throw new Error('缺少私钥')
+        const myPrivKey = await importPrivateKey(privKeyB64)
+        const sessionKey = await generateSessionKey()
+        const { encryptedBlob, nonce } = await encryptMessage(sessionKey, newText)
+
+        const recipientKeys: Record<string, string> = {}
+        for (const [uid, uinfo] of Object.entries(userDirectory)) {
+            try {
+                const pubKey = await importPublicKey(uinfo.publicKey)
+                const shared = await deriveSharedSecret(myPrivKey, pubKey)
+                const { encryptedSessionKey } = await encryptSessionKey(sessionKey, shared)
+                recipientKeys[uid] = encryptedSessionKey
+            } catch { /* skip */ }
+        }
+
+        const payload = {
+            encrypted_blob: encryptedBlob,
+            nonce,
+            sender_id: user.id,
+            group_id: view.type === 'channel' ? view.id : null,
+            recipient_id: view.type === 'dm' ? view.uid : null,
+            recipient_keys: recipientKeys,
+        }
+        await messageApi.editMessage(msgId, payload)
+    }
+
+    const handleSaveEdit = async (msgId: string) => {
+        if (!editInput.trim() || !user) return
+        try {
+            await editEncryptedMessage(editInput.trim(), msgId, currentView)
+            setMessages(prev => prev.map(m => m.id === msgId ? { ...m, text: editInput.trim() } : m))
+        } catch (e) {
+            console.error('编辑失败', e)
+            alert('编辑失败')
+        } finally {
+            setEditingMsgId(null)
+            setEditInput('')
         }
     }
 
@@ -658,6 +705,31 @@ export const Chat = () => {
                                                         </div>
                                                     )
                                                 })()
+                                            ) : editingMsgId === msg.id ? (
+                                                <div className="flex flex-col gap-2 min-w-[200px]">
+                                                    <textarea
+                                                        className="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 text-sm focus:outline-none focus:border-indigo-500 resize-none"
+                                                        rows={2}
+                                                        value={editInput}
+                                                        onChange={(e) => setEditInput(e.target.value)}
+                                                        autoFocus
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Escape') setEditingMsgId(null)
+                                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                                                e.preventDefault()
+                                                                handleSaveEdit(msg.id)
+                                                            }
+                                                        }}
+                                                    />
+                                                    <div className="flex justify-end gap-2">
+                                                        <button onClick={() => setEditingMsgId(null)} className="p-1 text-slate-400 hover:text-white bg-slate-800 rounded">
+                                                            <X className="w-3.5 h-3.5" />
+                                                        </button>
+                                                        <button onClick={() => handleSaveEdit(msg.id)} className="p-1 text-green-400 hover:text-green-300 bg-slate-800 rounded">
+                                                            <Check className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    </div>
+                                                </div>
                                             ) : (
                                                 <div className="w-full break-words leading-relaxed [&_a]:text-blue-300 [&_a]:underline [&_pre]:bg-slate-900 [&_pre]:p-2 [&_pre]:rounded [&_code]:font-mono [&_code]:bg-slate-900/50 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_p]:my-1 [&_ul]:list-disc [&_ul]:ml-5 [&_ol]:list-decimal [&_ol]:ml-5 [&_blockquote]:border-l-4 [&_blockquote]:border-slate-500 [&_blockquote]:pl-3 [&_blockquote]:italic">
                                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -721,6 +793,16 @@ export const Chat = () => {
                                                 >
                                                     <Reply className="w-3.5 h-3.5" />
                                                 </button>
+
+                                                {msg.isMe && !fileMatch && msg.isDecrypted && (
+                                                    <button
+                                                        onClick={() => { setEditingMsgId(msg.id); setEditInput(msg.text); }}
+                                                        className="p-1.5 text-slate-400 hover:text-blue-400 rounded transition-colors"
+                                                        title="编辑"
+                                                    >
+                                                        <Edit3 className="w-3.5 h-3.5" />
+                                                    </button>
+                                                )}
 
                                                 {msg.isMe && (
                                                     <button
