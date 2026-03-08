@@ -14,6 +14,13 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
     return config
 })
 
+export interface ForwardInfo {
+    original_message_id: string
+    original_sender_id: string
+    original_sender_name: string
+    original_timestamp: number
+}
+
 export interface AuthResponse {
     token: string
     user_id: string
@@ -33,9 +40,13 @@ export interface StoredMessage {
         recipient_id: string | null
         recipient_keys: Record<string, string>
         reply_to?: string | null
-        mentions?: string[] | null
+        reply_to_preview?: string | null
+        mentions?: string[]
         content_type?: string | null
+        forward_info?: ForwardInfo
     }
+    reply_to?: string | null
+    reply_to_preview?: string | null
 }
 
 export interface PinnedMessage {
@@ -119,11 +130,18 @@ export const messageApi = {
     getPinnedMessages: (channelId: string) =>
         api.get<PinnedMessage[]>(`/messages/pin/channel/${channelId}`),
 
-    forwardMessage: (content: string, targetChannelId?: string, targetUserId?: string) =>
-        api.post<string>('/messages/forward', {
-            content,
-            target_channel_id: targetChannelId ?? null,
-            target_user_id: targetUserId ?? null,
+    forwardMessage: (messageIds: string[], targetType: string, targetId: string) =>
+        api.post<string[]>('/messages/forward', {
+            message_ids: messageIds,
+            target_type: targetType,
+            target_id: targetId,
+        }),
+
+    forwardCombined: (messageIds: string[], targetType: string, targetId: string) =>
+        api.post<string>('/messages/forward_combined', {
+            message_ids: messageIds,
+            target_type: targetType,
+            target_id: targetId,
         }),
 
     searchMessages: (q: string, channelId?: string, limit = 30) =>
@@ -163,8 +181,10 @@ export interface MessageEventData {
         recipient_id: string | null
         recipient_keys: Record<string, string>
         reply_to?: string | null
-        mentions?: string[] | null
+        reply_to_preview?: string | null
+        mentions?: string[]
         content_type?: string | null
+        forward_info?: ForwardInfo
     }
     timestamp: number
 }

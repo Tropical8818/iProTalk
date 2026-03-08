@@ -1,6 +1,14 @@
 use serde::{Deserialize, Serialize};
 use poem_openapi::Object;
 
+#[derive(Debug, Object, Serialize, Deserialize, Clone)]
+pub struct ForwardInfo {
+    pub original_message_id: String,
+    pub original_sender_id: String,
+    pub original_sender_name: String,
+    pub original_timestamp: i64,
+}
+
 #[derive(Debug, Object, Serialize, Deserialize)]
 pub struct RegisterRequest {
     pub email: String,
@@ -56,6 +64,8 @@ pub struct MessagePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[oai(default)]
     pub content_type: Option<String>,      // "text", "image", "file", "audio", "video", etc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_info: Option<ForwardInfo>,
 }
 
 /// Generic realtime event sent over SSE.  All variants are serialised as JSON.

@@ -154,6 +154,7 @@ impl WebhookApi {
             reply_to_preview: None,
             mentions: Vec::new(),
             content_type: Some("text".to_string()),
+            forward_info: None,
         };
 
         let timestamp = chrono::Utc::now().timestamp();
