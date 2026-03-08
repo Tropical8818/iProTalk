@@ -92,6 +92,14 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
             created_by TEXT NOT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
+        "CREATE TABLE IF NOT EXISTS user_roles (
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'member',
+            channel_id TEXT,
+            assigned_by TEXT,
+            assigned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, role, channel_id)
+        )",
     ];
 
     for stmt in additive_migrations {

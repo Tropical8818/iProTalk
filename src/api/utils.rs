@@ -1,5 +1,6 @@
 use jsonwebtoken::{decode, Validation, DecodingKey};
 use serde::Deserialize;
+use sqlx::Row;
 
 #[derive(Deserialize)]
 struct Claims {
@@ -20,4 +21,14 @@ pub fn decode_user_id_from_token(token: &str) -> anyhow::Result<String> {
     )?;
     
     Ok(token_data.claims.sub)
+}
+
+pub async fn check_is_admin(pool: &sqlx::SqlitePool, user_id: &str) -> bool {
+    let row = sqlx::query("SELECT is_admin FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+    
+    row.map(|r| r.get::<bool, _>("is_admin")).unwrap_or(false)
 }

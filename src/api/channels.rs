@@ -130,8 +130,17 @@ impl ChannelsApi {
         #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
     ) -> Result<Json<String>> {
         let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
-        let _user_id = decode_user_id_from_token(&token)
+        let user_id = decode_user_id_from_token(&token)
             .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        // Check if user is admin or owner
+        let is_admin = crate::api::utils::check_is_admin(&state.sql_pool, &user_id).await;
+        let is_owner = sqlx::query("SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ? AND role = 'owner'")
+            .bind(&id.0).bind(&user_id).fetch_optional(&state.sql_pool).await.unwrap_or(None).is_some();
+
+        if !is_admin && !is_owner {
+            return Err(poem::Error::from_string("Permission Denied: Only admins or owners can update channels", poem::http::StatusCode::FORBIDDEN));
+        }
 
         if let Some(name) = &req.0.name {
             sqlx::query("UPDATE channels SET name = ? WHERE id = ?")
@@ -156,8 +165,13 @@ impl ChannelsApi {
         #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
     ) -> Result<Json<String>> {
         let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
-        let _user_id = decode_user_id_from_token(&token)
+        let user_id = decode_user_id_from_token(&token)
             .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        let is_admin = crate::api::utils::check_is_admin(&state.sql_pool, &user_id).await;
+        if !is_admin {
+            return Err(poem::Error::from_string("Permission Denied: Only admins can delete channels", poem::http::StatusCode::FORBIDDEN));
+        }
 
         sqlx::query("DELETE FROM channels WHERE id = ?")
             .bind(&id.0)
@@ -241,8 +255,16 @@ impl ChannelsApi {
         #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
     ) -> Result<Json<String>> {
         let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
-        let _user_id = decode_user_id_from_token(&token)
+        let user_id = decode_user_id_from_token(&token)
             .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        let is_admin = crate::api::utils::check_is_admin(&state.sql_pool, &user_id).await;
+        let is_owner = sqlx::query("SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ? AND role = 'owner'")
+            .bind(&id.0).bind(&user_id).fetch_optional(&state.sql_pool).await.unwrap_or(None).is_some();
+
+        if !is_admin && !is_owner {
+            return Err(poem::Error::from_string("Permission Denied: Only admins or owners can set announcements", poem::http::StatusCode::FORBIDDEN));
+        }
 
         sqlx::query("UPDATE channels SET announcement = ? WHERE id = ?")
             .bind(&req.0.announcement).bind(&id.0)

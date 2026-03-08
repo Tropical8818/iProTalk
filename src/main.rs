@@ -1,4 +1,5 @@
-use poem::{listener::TcpListener, Route, Server, EndpointExt};
+use poem::{listener::TcpListener, Route, Server, EndpointExt, handler, IntoResponse};
+use poem::web::Json;
 use std::env;
 use tracing_subscriber;
 
@@ -13,6 +14,15 @@ use api::{
 };
 use db::init_db;
 
+#[handler]
+fn health_check() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime": "running"
+    }))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
     // Initialize logging
@@ -21,7 +31,6 @@ async fn main() -> Result<(), std::io::Error> {
     }
     tracing_subscriber::fmt::init();
 
-    // Load environment variables (optional, for now hardcoded fallback)
     let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite::memory:".to_string());
     let msg_db_path = env::var("MSG_DB_PATH").unwrap_or_else(|_| "msg_db".to_string());
     let _secret_key = env::var("SECRET_KEY").expect("SECRET_KEY must be set for security");
@@ -40,10 +49,14 @@ async fn main() -> Result<(), std::io::Error> {
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();
 
-    let cors = poem::middleware::Cors::new();
+    let cors = poem::middleware::Cors::new()
+        .allow_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+        .allow_headers(vec!["Authorization", "Content-Type", "X-Webhook-Secret", "Accept"])
+        .allow_credentials(true);
 
     let app = Route::new()
         .at("/", poem::endpoint::StaticFilesEndpoint::new("static").index_file("index.html"))
+        .at("/api/health", poem::get(health_check))
         .at("/api/messages/events", poem::get(api::messages::sse_handler))
         .at("/api/users/:uid/avatar", poem::get(api::users::get_avatar))
         .at("/api/files/:id", poem::get(api::files::download_file))
