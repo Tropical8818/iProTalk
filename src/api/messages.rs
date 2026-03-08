@@ -650,7 +650,10 @@ pub struct TypingRequest {
     pub is_typing: bool,
 }
 
-/// Fetch user names for a list of user IDs in a single batch query.
+/// Fetch user display names for a list of user IDs in a single batch query.
+///
+/// Returns a `HashMap` of `user_id -> display_name`. Any user ID not found in the database
+/// will simply be absent from the map; callers should fall back to the user ID itself.
 async fn fetch_user_names(pool: &sqlx::SqlitePool, user_ids: &[String]) -> Result<HashMap<String, String>, sqlx::Error> {
     if user_ids.is_empty() {
         return Ok(HashMap::new());

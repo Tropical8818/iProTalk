@@ -192,7 +192,7 @@ async fn save_state(pool: &sqlx::SqlitePool, state: &str, provider: &str) -> any
 }
 
 async fn validate_and_delete_state(pool: &sqlx::SqlitePool, state: &str) -> anyhow::Result<()> {
-    // States expire after 10 minutes to prevent CSRF replay attacks
+    // States are valid for 10 minutes after creation to prevent CSRF replay attacks
     let row = sqlx::query(
         "SELECT state FROM oauth_states WHERE state = ? \
          AND created_at >= datetime('now', '-10 minutes')",
