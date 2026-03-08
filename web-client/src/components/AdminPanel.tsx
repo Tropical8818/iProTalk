@@ -1,17 +1,29 @@
 import { useState } from 'react';
-import { useGetUsersQuery, useToggleBanMutation, useToggleAdminMutation, useDeleteUserMutation, useResetPasswordMutation } from '../store/api/adminApi';
-import { Shield, ShieldOff, Ban, UserX, KeyRound, Loader2 } from 'lucide-react';
+import { useGetUsersQuery, useToggleBanMutation, useToggleAdminMutation, useDeleteUserMutation, useResetPasswordMutation, useGetRegistrationSettingQuery, useToggleRegistrationSettingMutation, useGetServerStatsQuery } from '../store/api/adminApi';
+import { Shield, ShieldOff, Ban, UserX, KeyRound, Loader2, UserPlus, Users, Hash, MessageCircle } from 'lucide-react';
 
 export default function AdminPanel() {
     const { data: users, isLoading, error } = useGetUsersQuery({});
+    const { data: regSetting, refetch: refetchRegSetting } = useGetRegistrationSettingQuery();
+    const { data: serverStats } = useGetServerStatsQuery();
     const [toggleBan] = useToggleBanMutation();
     const [toggleAdmin] = useToggleAdminMutation();
     const [deleteUser] = useDeleteUserMutation();
     const [resetPassword] = useResetPasswordMutation();
+    const [toggleRegistration] = useToggleRegistrationSettingMutation();
     const [passwordInput, setPasswordInput] = useState<Record<string, string>>({});
 
     if (isLoading) return <div className="flex h-64 items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-indigo-500" /></div>;
     if (error) return <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl">Failed to load users for administration.</div>;
+
+    const handleToggleRegistration = async () => {
+        try {
+            await toggleRegistration().unwrap();
+            refetchRegSetting();
+        } catch (err) {
+            console.error(err);
+        }
+    };
 
     const handleResetPassword = async (uid: string) => {
         const pw = passwordInput[uid];
@@ -39,6 +51,58 @@ export default function AdminPanel() {
                 <div>
                     <h3 className="text-xl font-bold text-white">System Administration</h3>
                     <p className="text-sm text-slate-400">Manage all users across the workspace</p>
+                </div>
+            </div>
+
+            {/* Server Overview Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 shrink-0">
+                        <Users className="w-6 h-6" />
+                    </div>
+                    <div>
+                        <p className="text-sm text-slate-400 font-medium tracking-wide uppercase">Total Users</p>
+                        <p className="text-2xl font-bold text-white">{serverStats?.total_users || 0}</p>
+                    </div>
+                </div>
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400 shrink-0">
+                        <Hash className="w-6 h-6" />
+                    </div>
+                    <div>
+                        <p className="text-sm text-slate-400 font-medium tracking-wide uppercase">Total Channels</p>
+                        <p className="text-2xl font-bold text-white">{serverStats?.total_channels || 0}</p>
+                    </div>
+                </div>
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-400 shrink-0">
+                        <MessageCircle className="w-6 h-6" />
+                    </div>
+                    <div>
+                        <p className="text-sm text-slate-400 font-medium tracking-wide uppercase">Total Messages</p>
+                        <p className="text-2xl font-bold text-white">{serverStats?.total_messages || 0}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div className="mb-6 bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden p-1">
+                <div className="p-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400">
+                            <UserPlus className="w-5 h-5" />
+                        </div>
+                        <div>
+                            <p className="text-sm font-medium text-white">Open Registration</p>
+                            <p className="text-xs text-slate-400">Allow anyone to register a new account on this server</p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={handleToggleRegistration}
+                        className={`relative inline-flex h-6 w-10 overflow-hidden rounded-full transition-colors ease-in-out duration-200 focus:outline-none ${regSetting?.allow_registration ? 'bg-indigo-500' : 'bg-slate-600'}`}
+                        title={regSetting?.allow_registration ? "Disable Registration" : "Enable Registration"}
+                    >
+                        <span className={`inline-block h-6 w-6 transform rounded-full bg-white transition ease-in-out duration-200 ${regSetting?.allow_registration ? 'translate-x-4' : 'translate-x-0'}`} />
+                    </button>
                 </div>
             </div>
 

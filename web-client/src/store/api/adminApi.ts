@@ -6,6 +6,18 @@ export const adminApi = baseApi.injectEndpoints({
             query: () => '/admin/users',
             providesTags: ['User'],
         }),
+        getRegistrationSetting: builder.query<{ allow_registration: boolean }, void>({
+            query: () => '/admin/config/registration',
+        }),
+        getServerStats: builder.query<{ total_users: number, total_channels: number, total_messages: number }, void>({
+            query: () => '/admin/stats',
+        }),
+        toggleRegistrationSetting: builder.mutation<string, void>({
+            query: () => ({
+                url: '/admin/config/registration',
+                method: 'PUT',
+            }),
+        }),
         toggleBan: builder.mutation({
             query: (uid: string) => ({
                 url: `/admin/users/${uid}/ban`,
@@ -39,6 +51,9 @@ export const adminApi = baseApi.injectEndpoints({
 
 export const {
     useGetUsersQuery,
+    useGetRegistrationSettingQuery,
+    useGetServerStatsQuery,
+    useToggleRegistrationSettingMutation,
     useToggleBanMutation,
     useToggleAdminMutation,
     useDeleteUserMutation,

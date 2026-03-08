@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Upload, Shield, LogOut, KeyRound, Bell, Volume2 } from 'lucide-react';
+import { X, Upload, Shield, LogOut, KeyRound, Bell, Volume2, Monitor, Moon, Sun } from 'lucide-react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../store';
 import { logout, setCredentials } from '../store/slices/authSlice';
@@ -16,7 +16,7 @@ export default function UserSettingsModal({ onClose }: UserSettingsModalProps) {
     const dispatch = useDispatch();
     const user = useSelector((state: RootState) => state.auth.user);
     const token = useSelector((state: RootState) => state.auth.token);
-    const [activeTab, setActiveTab] = useState<'profile' | 'notifications' | 'admin'>('profile');
+    const [activeTab, setActiveTab] = useState<'profile' | 'notifications' | 'appearance' | 'admin'>('profile');
 
     const [uploadAvatar, { isLoading: isUploadingAvatar }] = useUploadAvatarMutation();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -36,6 +36,25 @@ export default function UserSettingsModal({ onClose }: UserSettingsModalProps) {
     // 通知设置
     const [enableNotifications, setEnableNotifications] = useState(localStorage.getItem('notification_enabled') === 'true');
     const [enableSound, setEnableSound] = useState(localStorage.getItem('notification_sound') !== 'false');
+
+    // 外观设置
+    type Theme = 'light' | 'dark' | 'system';
+    const [theme, setTheme] = useState<Theme>((localStorage.getItem('theme') as Theme) || 'system');
+
+    const handleThemeChange = (newTheme: Theme) => {
+        setTheme(newTheme);
+        localStorage.setItem('theme', newTheme);
+
+        const root = window.document.documentElement;
+        root.classList.remove('light', 'dark');
+
+        if (newTheme === 'system') {
+            const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            root.classList.add(systemTheme);
+        } else {
+            root.classList.add(newTheme);
+        }
+    };
 
     const handleToggleNotifications = async () => {
         if (!enableNotifications) {
@@ -181,6 +200,15 @@ export default function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                             >
                                 <Bell className="w-5 h-5 shrink-0" />
                                 消息通知
+                            </button>
+
+                            <button
+                                onClick={() => setActiveTab('appearance')}
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium text-sm ${activeTab === 'appearance' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                                    }`}
+                            >
+                                <Monitor className="w-5 h-5 shrink-0" />
+                                外观设置
                             </button>
 
                             {user.is_admin && (
@@ -366,6 +394,46 @@ export default function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                                     <p className="text-xs text-slate-500">
                                         提示：开启桌面通知前，请确保您的浏览器没有在操作系统层面被屏蔽通知权限。
                                     </p>
+                                </div>
+                            )}
+
+                            {activeTab === 'appearance' && (
+                                <div className="max-w-lg space-y-6">
+                                    <h3 className="text-xl font-bold text-white">外观设置</h3>
+
+                                    <div className="bg-slate-900 rounded-xl border border-slate-800 p-1">
+                                        <div className="p-4">
+                                            <p className="text-sm font-medium text-white mb-4">主题模式</p>
+                                            <div className="grid grid-cols-3 gap-3">
+                                                <button
+                                                    onClick={() => handleThemeChange('light')}
+                                                    className={`flex flex-col items-center justify-center p-4 rounded-xl border transition-all ${theme === 'light' ? 'border-indigo-500 bg-indigo-500/10 text-indigo-400' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:bg-slate-800'}`}
+                                                >
+                                                    <Sun className="w-6 h-6 mb-2" />
+                                                    <span className="text-xs font-medium">浅色</span>
+                                                </button>
+
+                                                <button
+                                                    onClick={() => handleThemeChange('dark')}
+                                                    className={`flex flex-col items-center justify-center p-4 rounded-xl border transition-all ${theme === 'dark' ? 'border-indigo-500 bg-indigo-500/10 text-indigo-400' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:bg-slate-800'}`}
+                                                >
+                                                    <Moon className="w-6 h-6 mb-2" />
+                                                    <span className="text-xs font-medium">深色</span>
+                                                </button>
+
+                                                <button
+                                                    onClick={() => handleThemeChange('system')}
+                                                    className={`flex flex-col items-center justify-center p-4 rounded-xl border transition-all ${theme === 'system' ? 'border-indigo-500 bg-indigo-500/10 text-indigo-400' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:bg-slate-800'}`}
+                                                >
+                                                    <Monitor className="w-6 h-6 mb-2" />
+                                                    <span className="text-xs font-medium">跟随系统</span>
+                                                </button>
+                                            </div>
+                                            <p className="mt-4 text-xs text-slate-400">
+                                                {"注：目前 iProTalk 主要采用暗黑风格设计作为核心视觉语言，我们正在逐步完善亮色模式的支持，部分界面在浅色模式下可能仍显示为深色组件。"}
+                                            </p>
+                                        </div>
+                                    </div>
                                 </div>
                             )}
 
