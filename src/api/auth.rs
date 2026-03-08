@@ -24,6 +24,24 @@ impl AuthApi {
         state: Data<&AppState>,
         req: Json<RegisterRequest>,
     ) -> Result<Json<AuthResponse>> {
+        // Check if registration is allowed
+        let allow_reg_row = sqlx::query("SELECT value FROM settings WHERE key = 'allow_registration'")
+            .fetch_optional(&state.sql_pool)
+            .await
+            .map_err(InternalServerError)?;
+
+        let mut is_allowed = true;
+        if let Some(row) = allow_reg_row {
+            let val: String = row.get("value");
+            if val == "false" {
+                is_allowed = false;
+            }
+        }
+
+        if !is_allowed {
+            return Err(poem::Error::from_string("Registration is currently disabled by administrator.", poem::http::StatusCode::FORBIDDEN));
+        }
+
         let user_id = Uuid::new_v4().to_string();
         let hashed = hash(&req.0.password, DEFAULT_COST).map_err(InternalServerError)?;
 

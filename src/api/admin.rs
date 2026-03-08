@@ -23,6 +23,18 @@ pub struct AdminPasswordResetReq {
     pub new_password: String,
 }
 
+#[derive(Debug, Object, Serialize, Deserialize)]
+pub struct RegistrationSettingResponse {
+    pub allow_registration: bool,
+}
+
+#[derive(Debug, Object, Serialize, Deserialize)]
+pub struct ServerStatsResponse {
+    pub total_users: i64,
+    pub total_channels: i64,
+    pub total_messages: i64,
+}
+
 #[OpenApi]
 impl AdminApi {
     async fn check_admin(&self, state: &Data<&AppState>, token: &str) -> Result<()> {
@@ -155,5 +167,101 @@ impl AdminApi {
             .map_err(InternalServerError)?;
 
         Ok(Json("Password reset".to_string()))
+    }
+
+    #[oai(path = "/admin/config/registration", method = "get")]
+    async fn get_registration_setting(
+        &self,
+        state: Data<&AppState>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<RegistrationSettingResponse>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        self.check_admin(&state, &token).await?;
+
+        let row = sqlx::query("SELECT value FROM settings WHERE key = 'allow_registration'")
+            .fetch_optional(&state.sql_pool)
+            .await
+            .map_err(InternalServerError)?;
+
+        let mut allow_reg = true; // default
+        if let Some(row) = row {
+            let val: String = row.get("value");
+            allow_reg = val == "true";
+        }
+
+        Ok(Json(RegistrationSettingResponse {
+            allow_registration: allow_reg,
+        }))
+    }
+
+    #[oai(path = "/admin/config/registration", method = "put")]
+    async fn toggle_registration_setting(
+        &self,
+        state: Data<&AppState>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        self.check_admin(&state, &token).await?;
+
+        let row = sqlx::query("SELECT value FROM settings WHERE key = 'allow_registration'")
+            .fetch_optional(&state.sql_pool)
+            .await
+            .map_err(InternalServerError)?;
+
+        let mut new_val = "false";
+        if let Some(row) = row {
+            let val: String = row.get("value");
+            if val == "false" {
+                new_val = "true";
+            }
+        } else {
+             new_val = "false"; // if it somehow doesn't exist (default was true), toggle to false
+        }
+
+        sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES ('allow_registration', ?)")
+            .bind(new_val)
+            .execute(&state.sql_pool)
+            .await
+            .map_err(InternalServerError)?;
+
+        Ok(Json(format!("Registration allowed set to {}", new_val)))
+    }
+
+    #[oai(path = "/admin/stats", method = "get")]
+    async fn get_server_stats(
+        &self,
+        state: Data<&AppState>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<ServerStatsResponse>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        self.check_admin(&state, &token).await?;
+
+        // Total users
+        let user_count_row = sqlx::query("SELECT COUNT(*) as count FROM users")
+            .fetch_one(&state.sql_pool)
+            .await
+            .map_err(InternalServerError)?;
+        let total_users: i64 = user_count_row.get(0);
+
+        // Total channels
+        let channel_count_row = sqlx::query("SELECT COUNT(*) as count FROM channels")
+            .fetch_one(&state.sql_pool)
+            .await
+            .map_err(InternalServerError)?;
+        let total_channels: i64 = channel_count_row.get(0);
+
+        // Total messages from Sled
+        // This is an O(N) operation in Sled, so it might be slow for massive databases, 
+        // but fine for a small/medium self-hosted instance. 
+        // A better approach for huge DBs is to maintain a counter during inserts/deletes.
+        let mut total_messages = 0;
+        let iter = state.msg_db.scan_prefix("");
+        total_messages = iter.count() as i64;
+
+        Ok(Json(ServerStatsResponse {
+            total_users,
+            total_channels,
+            total_messages,
+        }))
     }
 }

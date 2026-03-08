@@ -42,6 +42,25 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
 
+    // Create table for system settings
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )"
+    )
+    .execute(&sql_pool)
+    .await
+    .map_err(|e| anyhow::anyhow!("Failed to create settings table: {}", e))?;
+
+    // Insert default settings if they don't exist
+    sqlx::query(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('allow_registration', 'true')"
+    )
+    .execute(&sql_pool)
+    .await
+    .map_err(|e| anyhow::anyhow!("Failed to insert default settings: {}", e))?;
+
     // Run additive migrations that add columns to existing tables
     // SQLite doesn't support ADD COLUMN IF NOT EXISTS, so we try each and ignore errors
     let additive_migrations: &[&str] = &[
