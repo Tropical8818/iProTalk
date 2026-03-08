@@ -1,6 +1,6 @@
 use poem::{web::{Data, Query}, Result, error::InternalServerError};
 use poem_openapi::{OpenApi, payload::Json, param::{Path, Header}};
-use crate::{db::AppState, models::{MessagePayload, MessageEvent}, api::utils::decode_user_id_from_token};
+use crate::{db::AppState, models::{ForwardInfo, MessagePayload, MessageEvent}, api::utils::decode_user_id_from_token};
 use futures_util::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
@@ -8,6 +8,7 @@ use poem::web::sse::Event;
 use serde::{Deserialize, Serialize};
 use poem_openapi::Object;
 use sqlx::Row;
+use std::collections::HashMap;
 
 #[derive(Debug, Object, Serialize, Deserialize, Clone)]
 pub struct PinnedMessage {
@@ -27,9 +28,16 @@ pub struct PinRequest {
 
 #[derive(Debug, Object, Deserialize)]
 pub struct ForwardRequest {
-    pub content: String,       // original content text / encrypted blob
-    pub target_channel_id: Option<String>,
-    pub target_user_id: Option<String>,
+    pub message_ids: Vec<String>,
+    pub target_type: String, // "user" | "channel" | "group"
+    pub target_id: String,
+}
+
+#[derive(Debug, Object, Deserialize)]
+pub struct ForwardCombinedRequest {
+    pub message_ids: Vec<String>,
+    pub target_type: String, // "user" | "channel" | "group"
+    pub target_id: String,
 }
 
 #[derive(Deserialize)]
@@ -81,7 +89,10 @@ impl MessagesApi {
             payload: req.0.clone(),
         };
         let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-        state.msg_db.insert(key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        state.msg_db.insert(key, value.clone()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        // Secondary index for lookup by message ID
+        let idx_key = format!("msg_idx:{}", msg_id);
+        state.msg_db.insert(idx_key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
 
         let event = MessageEvent {
             event_type: "new_message".to_string(),
@@ -147,7 +158,10 @@ impl MessagesApi {
             payload: req.0.clone(),
         };
         let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-        state.msg_db.insert(dm_key_prefix, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        state.msg_db.insert(dm_key_prefix, value.clone()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        // Secondary index for lookup by message ID
+        let idx_key = format!("msg_idx:{}", msg_id);
+        state.msg_db.insert(idx_key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
 
         let event = MessageEvent {
             event_type: "dm_message".to_string(),
@@ -226,6 +240,7 @@ impl MessagesApi {
             group_id: None,
             recipient_id: None,
             recipient_keys: std::collections::HashMap::new(),
+            forward_info: None,
         };
 
         let event = MessageEvent {
@@ -318,33 +333,200 @@ impl MessagesApi {
         state: Data<&AppState>,
         req: Json<ForwardRequest>,
         #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<Vec<String>>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        let sender_id = decode_user_id_from_token(&token)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        // First pass: collect all original messages from Sled
+        let mut orig_messages: Vec<StoredMessage> = Vec::new();
+        let mut unique_sender_ids: Vec<String> = Vec::new();
+        for orig_id in &req.0.message_ids {
+            let idx_key = format!("msg_idx:{}", orig_id);
+            if let Some(bytes) = state.msg_db.get(idx_key.as_bytes())
+                .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?
+            {
+                if let Ok(m) = serde_json::from_slice::<StoredMessage>(&bytes) {
+                    if !unique_sender_ids.contains(&m.payload.sender_id) {
+                        unique_sender_ids.push(m.payload.sender_id.clone());
+                    }
+                    orig_messages.push(m);
+                }
+            }
+        }
+
+        // Batch fetch sender names in a single query
+        let sender_names = fetch_user_names(&state.sql_pool, &unique_sender_ids)
+            .await
+            .map_err(InternalServerError)?;
+
+        let mut new_ids: Vec<String> = Vec::new();
+        for orig_stored in orig_messages {
+            let orig_sender_name = sender_names.get(&orig_stored.payload.sender_id)
+                .cloned()
+                .unwrap_or_else(|| orig_stored.payload.sender_id.clone());
+
+            let forward_info = ForwardInfo {
+                original_message_id: orig_stored.id.clone(),
+                original_sender_id: orig_stored.payload.sender_id.clone(),
+                original_sender_name: orig_sender_name,
+                original_timestamp: orig_stored.timestamp,
+            };
+
+            let msg_id = Uuid::new_v4().to_string();
+            let timestamp = chrono::Utc::now().timestamp();
+
+            let mut payload = orig_stored.payload.clone();
+            payload.sender_id = sender_id.clone();
+            payload.forward_info = Some(forward_info);
+
+            let event_type;
+            match req.0.target_type.as_str() {
+                "user" => {
+                    payload.group_id = None;
+                    payload.recipient_id = Some(req.0.target_id.clone());
+                    event_type = "dm_message";
+
+                    let mut pair = vec![sender_id.clone(), req.0.target_id.clone()];
+                    pair.sort();
+                    let dm_key = format!("dm:{}:{}:ts:{:020}:{}", pair[0], pair[1], timestamp, msg_id);
+                    let stored = StoredMessage { id: msg_id.clone(), timestamp, payload: payload.clone() };
+                    let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                    state.msg_db.insert(dm_key, value.clone()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                    let new_idx_key = format!("msg_idx:{}", msg_id);
+                    state.msg_db.insert(new_idx_key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                }
+                _ => {
+                    // "channel" or "group"
+                    payload.group_id = Some(req.0.target_id.clone());
+                    payload.recipient_id = None;
+                    event_type = "new_message";
+
+                    let key = format!("group:{}:ts:{:020}:{}", req.0.target_id, timestamp, msg_id);
+                    let stored = StoredMessage { id: msg_id.clone(), timestamp, payload: payload.clone() };
+                    let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                    state.msg_db.insert(key, value.clone()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                    let new_idx_key = format!("msg_idx:{}", msg_id);
+                    state.msg_db.insert(new_idx_key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                }
+            }
+
+            let event = MessageEvent {
+                event_type: event_type.to_string(),
+                payload,
+                timestamp,
+            };
+            let _ = state.sender.send(event);
+            new_ids.push(msg_id);
+        }
+
+        Ok(Json(new_ids))
+    }
+
+    /// 合并转发（多条消息合并为一条）
+    #[oai(path = "/messages/forward_combined", method = "post")]
+    async fn forward_combined(
+        &self,
+        state: Data<&AppState>,
+        req: Json<ForwardCombinedRequest>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
     ) -> Result<Json<String>> {
         let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
         let sender_id = decode_user_id_from_token(&token)
             .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
 
+        // First pass: collect all original messages and unique sender IDs
+        let mut orig_messages: Vec<StoredMessage> = Vec::new();
+        let mut unique_sender_ids: Vec<String> = Vec::new();
+        for orig_id in &req.0.message_ids {
+            let idx_key = format!("msg_idx:{}", orig_id);
+            if let Some(bytes) = state.msg_db.get(idx_key.as_bytes())
+                .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?
+            {
+                if let Ok(m) = serde_json::from_slice::<StoredMessage>(&bytes) {
+                    if !unique_sender_ids.contains(&m.payload.sender_id) {
+                        unique_sender_ids.push(m.payload.sender_id.clone());
+                    }
+                    orig_messages.push(m);
+                }
+            }
+        }
+
+        // Batch fetch sender names in a single query
+        let sender_names = fetch_user_names(&state.sql_pool, &unique_sender_ids)
+            .await
+            .map_err(InternalServerError)?;
+
+        // Build combined payload
+        let mut combined_parts: Vec<serde_json::Value> = Vec::new();
+        let mut first_forward_info: Option<ForwardInfo> = None;
+
+        for orig_stored in &orig_messages {
+            let orig_sender_name = sender_names.get(&orig_stored.payload.sender_id)
+                .cloned()
+                .unwrap_or_else(|| orig_stored.payload.sender_id.clone());
+
+            if first_forward_info.is_none() {
+                first_forward_info = Some(ForwardInfo {
+                    original_message_id: orig_stored.id.clone(),
+                    original_sender_id: orig_stored.payload.sender_id.clone(),
+                    original_sender_name: orig_sender_name.clone(),
+                    original_timestamp: orig_stored.timestamp,
+                });
+            }
+
+            combined_parts.push(serde_json::json!({
+                "id": orig_stored.id,
+                "sender_id": orig_stored.payload.sender_id,
+                "sender_name": orig_sender_name,
+                "timestamp": orig_stored.timestamp,
+                "encrypted_blob": orig_stored.payload.encrypted_blob,
+                "nonce": orig_stored.payload.nonce,
+            }));
+        }
+
+        let combined_blob = serde_json::to_string(&combined_parts)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+
         let msg_id = Uuid::new_v4().to_string();
         let timestamp = chrono::Utc::now().timestamp();
 
         let payload = MessagePayload {
-            encrypted_blob: req.0.content.clone(),
-            nonce: "forwarded".to_string(),
+            encrypted_blob: combined_blob,
+            nonce: "combined_forward".to_string(),
             sender_id: sender_id.clone(),
-            group_id: req.0.target_channel_id.clone(),
-            recipient_id: req.0.target_user_id.clone(),
+            group_id: if req.0.target_type != "user" { Some(req.0.target_id.clone()) } else { None },
+            recipient_id: if req.0.target_type == "user" { Some(req.0.target_id.clone()) } else { None },
             recipient_keys: std::collections::HashMap::new(),
+            forward_info: first_forward_info,
         };
 
-        // Store in sled
-        if let Some(ref cid) = req.0.target_channel_id {
-            let key = format!("group:{}:ts:{:020}:{}", cid, timestamp, msg_id);
-            let stored = crate::api::messages::StoredMessage { id: msg_id.clone(), timestamp, payload: payload.clone() };
-            let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-            state.msg_db.insert(key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        let event_type;
+        match req.0.target_type.as_str() {
+            "user" => {
+                event_type = "dm_message";
+                let mut pair = vec![sender_id.clone(), req.0.target_id.clone()];
+                pair.sort();
+                let dm_key = format!("dm:{}:{}:ts:{:020}:{}", pair[0], pair[1], timestamp, msg_id);
+                let stored = StoredMessage { id: msg_id.clone(), timestamp, payload: payload.clone() };
+                let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                state.msg_db.insert(dm_key, value.clone()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                let new_idx_key = format!("msg_idx:{}", msg_id);
+                state.msg_db.insert(new_idx_key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+            }
+            _ => {
+                event_type = "new_message";
+                let key = format!("group:{}:ts:{:020}:{}", req.0.target_id, timestamp, msg_id);
+                let stored = StoredMessage { id: msg_id.clone(), timestamp, payload: payload.clone() };
+                let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                state.msg_db.insert(key, value.clone()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                let new_idx_key = format!("msg_idx:{}", msg_id);
+                state.msg_db.insert(new_idx_key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+            }
         }
 
         let event = MessageEvent {
-            event_type: "new_message".to_string(),
+            event_type: event_type.to_string(),
             payload,
             timestamp,
         };
@@ -379,6 +561,29 @@ impl MessagesApi {
 
         Ok(Json(results))
     }
+}
+
+/// Fetch user names for a list of user IDs in a single batch query.
+async fn fetch_user_names(pool: &sqlx::SqlitePool, user_ids: &[String]) -> Result<HashMap<String, String>, sqlx::Error> {
+    if user_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut qb: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+        "SELECT id, name FROM users WHERE id IN ("
+    );
+    let mut separated = qb.separated(", ");
+    for uid in user_ids {
+        separated.push_bind(uid);
+    }
+    qb.push(")");
+    let rows = qb.build().fetch_all(pool).await?;
+    let mut map = HashMap::new();
+    for row in rows {
+        let id: String = row.get("id");
+        let name: String = row.get("name");
+        map.insert(id, name);
+    }
+    Ok(map)
 }
 
 #[poem::handler]

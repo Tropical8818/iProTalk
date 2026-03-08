@@ -14,14 +14,14 @@ interface Contact {
 }
 
 interface ForwardModalProps {
-    content: string;
+    messageId: string;
     channels: Channel[];
     contacts: Contact[];
     onClose: () => void;
     onSuccess?: () => void;
 }
 
-export default function ForwardModal({ content, channels, contacts, onClose, onSuccess }: ForwardModalProps) {
+export default function ForwardModal({ messageId, channels, contacts, onClose, onSuccess }: ForwardModalProps) {
     const [selectedChannel, setSelectedChannel] = useState<string>('');
     const [selectedUser, setSelectedUser] = useState<string>('');
     const [loading, setLoading] = useState(false);
@@ -31,11 +31,9 @@ export default function ForwardModal({ content, channels, contacts, onClose, onS
         if (!selectedChannel && !selectedUser) return;
         setLoading(true);
         try {
-            await messageApi.forwardMessage(
-                content,
-                selectedChannel || undefined,
-                selectedUser || undefined,
-            );
+            const targetType = selectedChannel ? 'channel' : 'user';
+            const targetId = selectedChannel || selectedUser;
+            await messageApi.forwardMessage([messageId], targetType, targetId);
             onSuccess?.();
             onClose();
         } catch (err) {
@@ -63,12 +61,6 @@ export default function ForwardModal({ content, channels, contacts, onClose, onS
                         <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
                             <X size={18} />
                         </button>
-                    </div>
-
-                    {/* Preview */}
-                    <div className="px-5 py-3 bg-slate-800/50">
-                        <p className="text-xs text-slate-400 mb-1">消息内容</p>
-                        <p className="text-sm text-slate-300 truncate">{content.slice(0, 80)}{content.length > 80 ? '...' : ''}</p>
                     </div>
 
                     {/* Tabs */}
