@@ -10,7 +10,7 @@ mod models;
 use api::{
     auth::AuthApi, keys::KeysApi, messages::MessagesApi, users::UsersApi,
     contacts::ContactsApi, files::FilesApi, admin::AdminApi, channels::ChannelsApi,
-    webhooks::WebhookApi,
+    webhooks::WebhookApi, reactions::ReactionsApi, presence::PresenceApi,
 };
 use db::init_db;
 
@@ -40,7 +40,7 @@ async fn main() -> Result<(), std::io::Error> {
 
     // create the API service
     let api_service = poem_openapi::OpenApiService::new(
-        (AuthApi, KeysApi, MessagesApi, UsersApi, ContactsApi, FilesApi, AdminApi, ChannelsApi, WebhookApi),
+        (AuthApi, KeysApi, MessagesApi, UsersApi, ContactsApi, FilesApi, AdminApi, ChannelsApi, WebhookApi, ReactionsApi, PresenceApi),
         "iProTalk API",
         "0.1.0",
     )

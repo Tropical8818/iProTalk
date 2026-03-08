@@ -1,6 +1,6 @@
 use poem::{web::{Data, Query}, Result, error::InternalServerError};
 use poem_openapi::{OpenApi, payload::Json, param::{Path, Header}};
-use crate::{db::AppState, models::{MessagePayload, MessageEvent}, api::utils::decode_user_id_from_token};
+use crate::{db::AppState, models::{MessagePayload, RealtimeEvent}, api::utils::decode_user_id_from_token};
 use futures_util::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
@@ -40,20 +40,24 @@ pub struct SearchQuery {
 }
 
 
-#[derive(Clone, Default)]
-pub struct MessagesApi;
-
 #[derive(Debug, Object, Serialize, Deserialize)]
 pub struct StoredMessage {
     pub id: String,
     pub timestamp: i64,
     pub payload: MessagePayload,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,         // ID of the message being replied to
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_preview: Option<String>, // Quoted preview of the replied message
 }
 
 #[derive(Deserialize)]
 pub struct HistoryQuery {
     pub limit: Option<i64>,
 }
+
+#[derive(Clone, Default)]
+pub struct MessagesApi;
 
 #[OpenApi]
 impl MessagesApi {
@@ -73,22 +77,32 @@ impl MessagesApi {
         let msg_id = Uuid::new_v4().to_string();
         let timestamp = chrono::Utc::now().timestamp();
 
-        // 存储到 Sled（key格式: group:{gid}:ts:{timestamp}:{msg_id}）
-        let key = format!("group:{}:ts:{:020}:{}", gid.0, timestamp, msg_id);
         let stored = StoredMessage {
             id: msg_id.clone(),
             timestamp,
             payload: req.0.clone(),
+            reply_to: req.0.reply_to.clone(),
+            reply_to_preview: req.0.reply_to_preview.clone(),
         };
+        let key = format!("group:{}:ts:{:020}:{}", gid.0, timestamp, msg_id);
         let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
         state.msg_db.insert(key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
 
-        let event = MessageEvent {
-            event_type: "new_message".to_string(),
-            payload: req.0.clone(),
-            timestamp,
-        };
+        let event = RealtimeEvent::NewMessage { payload: req.0.clone(), timestamp };
         let _ = state.sender.send(event);
+
+        // Broadcast mention events for each @mentioned user
+        for mentioned_uid in &req.0.mentions {
+            let mention_event = RealtimeEvent::Mention {
+                message_id: msg_id.clone(),
+                sender_id: req.0.sender_id.clone(),
+                mentioned_user_id: mentioned_uid.clone(),
+                channel_id: Some(gid.0.clone()),
+                timestamp,
+            };
+            let _ = state.sender.send(mention_event);
+        }
+
         Ok(Json(msg_id))
     }
 
@@ -145,15 +159,13 @@ impl MessagesApi {
             id: msg_id.clone(),
             timestamp,
             payload: req.0.clone(),
+            reply_to: req.0.reply_to.clone(),
+            reply_to_preview: req.0.reply_to_preview.clone(),
         };
         let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
         state.msg_db.insert(dm_key_prefix, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
 
-        let event = MessageEvent {
-            event_type: "dm_message".to_string(),
-            payload: req.0.clone(),
-            timestamp,
-        };
+        let event = RealtimeEvent::DmMessage { payload: req.0.clone(), timestamp };
         let _ = state.sender.send(event);
         Ok(Json(msg_id))
     }
@@ -200,8 +212,7 @@ impl MessagesApi {
     ) -> Result<Json<String>> {
         let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
 
-        let event = MessageEvent {
-            event_type: "edit_message".to_string(),
+        let event = RealtimeEvent::EditMessage {
             payload: req.0.clone(),
             timestamp: chrono::Utc::now().timestamp(),
         };
@@ -219,18 +230,8 @@ impl MessagesApi {
     ) -> Result<Json<String>> {
         let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
 
-        let dummy_payload = MessagePayload {
-            encrypted_blob: mid.0.clone(),
-            nonce: "".to_string(),
-            sender_id: "".to_string(),
-            group_id: None,
-            recipient_id: None,
-            recipient_keys: std::collections::HashMap::new(),
-        };
-
-        let event = MessageEvent {
-            event_type: "delete_message".to_string(),
-            payload: dummy_payload,
+        let event = RealtimeEvent::DeleteMessage {
+            message_id: mid.0.clone(),
             timestamp: chrono::Utc::now().timestamp(),
         };
         let _ = state.sender.send(event);
@@ -333,21 +334,28 @@ impl MessagesApi {
             group_id: req.0.target_channel_id.clone(),
             recipient_id: req.0.target_user_id.clone(),
             recipient_keys: std::collections::HashMap::new(),
+            reply_to: None,
+            reply_to_preview: None,
+            mentions: Vec::new(),
         };
 
         // Store in sled
         if let Some(ref cid) = req.0.target_channel_id {
             let key = format!("group:{}:ts:{:020}:{}", cid, timestamp, msg_id);
-            let stored = crate::api::messages::StoredMessage { id: msg_id.clone(), timestamp, payload: payload.clone() };
-            let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-            state.msg_db.insert(key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+            let stored = StoredMessage {
+                id: msg_id.clone(),
+                timestamp,
+                payload: payload.clone(),
+                reply_to: None,
+                reply_to_preview: None,
+            };
+            let value = serde_json::to_vec(&stored)
+                .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+            state.msg_db.insert(key, value)
+                .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
         }
 
-        let event = MessageEvent {
-            event_type: "new_message".to_string(),
-            payload,
-            timestamp,
-        };
+        let event = RealtimeEvent::NewMessage { payload, timestamp };
         let _ = state.sender.send(event);
         Ok(Json(msg_id))
     }
@@ -379,6 +387,36 @@ impl MessagesApi {
 
         Ok(Json(results))
     }
+
+    /// 发送正在输入指示（Typing indicator）
+    #[oai(path = "/messages/typing", method = "post")]
+    async fn send_typing(
+        &self,
+        state: Data<&AppState>,
+        req: Json<TypingRequest>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        let user_id = decode_user_id_from_token(&token)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        let event = RealtimeEvent::Typing {
+            user_id,
+            channel_id: req.0.channel_id.clone(),
+            recipient_id: req.0.recipient_id.clone(),
+            is_typing: req.0.is_typing,
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+        let _ = state.sender.send(event);
+        Ok(Json("ok".to_string()))
+    }
+}
+
+#[derive(Debug, Object, Deserialize)]
+pub struct TypingRequest {
+    pub channel_id: Option<String>,
+    pub recipient_id: Option<String>,
+    pub is_typing: bool,
 }
 
 #[poem::handler]
@@ -393,7 +431,7 @@ pub async fn sse_handler(
                 let json = serde_json::to_string(&event).unwrap_or_default();
                 Event::message(json)
             }
-            Err(_) => Event::message("{\"error\": \"lagged\"}")
+            Err(_) => Event::message("{\"event_type\": \"error\", \"message\": \"lagged\"}")
         }
     });
 
