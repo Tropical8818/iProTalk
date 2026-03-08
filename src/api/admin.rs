@@ -1,7 +1,7 @@
 use poem::{web::Data, Result, error::InternalServerError};
 use poem_openapi::{OpenApi, payload::Json, param::{Path, Header}, Object};
 use serde::{Deserialize, Serialize};
-use crate::{db::AppState, api::utils::decode_user_id_from_token};
+use crate::{db::AppState, api::utils::decode_user_id_from_token, api::audit::log_audit};
 use sqlx::Row;
 use bcrypt::{hash, DEFAULT_COST};
 use uuid::Uuid;
@@ -122,6 +122,19 @@ impl AdminApi {
             .await
             .map_err(InternalServerError)?;
 
+        let actor_id = decode_user_id_from_token(&token).ok();
+        log_audit(
+            &state.sql_pool,
+            actor_id.as_deref(),
+            "admin",
+            "admin.ban_user",
+            Some("user"),
+            Some(&uid.0),
+            None,
+            None,
+        )
+        .await;
+
         Ok(Json("Ban toggled".to_string()))
     }
 
@@ -160,6 +173,19 @@ impl AdminApi {
             .await
             .map_err(InternalServerError)?;
 
+        let actor_id = decode_user_id_from_token(&token).ok();
+        log_audit(
+            &state.sql_pool,
+            actor_id.as_deref(),
+            "admin",
+            "admin.delete_user",
+            Some("user"),
+            Some(&uid.0),
+            None,
+            None,
+        )
+        .await;
+
         Ok(Json("User deleted".to_string()))
     }
 
@@ -182,6 +208,19 @@ impl AdminApi {
             .execute(&state.sql_pool)
             .await
             .map_err(InternalServerError)?;
+
+        let actor_id = decode_user_id_from_token(&token).ok();
+        log_audit(
+            &state.sql_pool,
+            actor_id.as_deref(),
+            "admin",
+            "admin.reset_password",
+            Some("user"),
+            Some(&uid.0),
+            None,
+            None,
+        )
+        .await;
 
         Ok(Json("Password reset".to_string()))
     }
@@ -241,6 +280,19 @@ impl AdminApi {
             .await
             .map_err(InternalServerError)?;
 
+        let actor_id = decode_user_id_from_token(&token).ok();
+        log_audit(
+            &state.sql_pool,
+            actor_id.as_deref(),
+            "admin",
+            "admin.toggle_registration",
+            Some("setting"),
+            Some("allow_registration"),
+            Some(serde_json::json!({ "new_value": new_val })),
+            None,
+        )
+        .await;
+
         Ok(Json(format!("Registration allowed set to {}", new_val)))
     }
 
@@ -298,6 +350,18 @@ impl AdminApi {
             .execute(&state.sql_pool)
             .await
             .map_err(InternalServerError)?;
+
+        log_audit(
+            &state.sql_pool,
+            Some(&user_id),
+            "admin",
+            "admin.create_invite",
+            Some("invite"),
+            Some(&code),
+            Some(serde_json::json!({ "max_uses": max_uses })),
+            None,
+        )
+        .await;
 
         Ok(Json(InviteLink {
             code,
