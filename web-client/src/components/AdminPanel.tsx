@@ -223,7 +223,7 @@ export default function AdminPanel() {
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-2">
-                                                {u.is_banned && <Ban className="w-4 h-4 text-rose-500" title="Banned" />}
+                                                {u.is_banned && <span title="Banned"><Ban className="w-4 h-4 text-rose-500" /></span>}
                                                 <div className="relative">
                                                     <button
                                                         onClick={() => setActiveDropdown(activeDropdown === u.id ? null : u.id)}
