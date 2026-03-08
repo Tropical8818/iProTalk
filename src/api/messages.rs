@@ -95,6 +95,8 @@ impl MessagesApi {
         let key = format!("group:{}:ts:{:020}:{}", gid.0, timestamp, msg_id);
         let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
         state.msg_db.insert(key, value.clone()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        // Secondary index for lookup by message ID
+        let idx_key = format!("msg_idx:{}", msg_id);
         state.msg_db.insert(idx_key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
 
         // 存储@提及记录到数据库
