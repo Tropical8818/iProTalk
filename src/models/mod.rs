@@ -44,6 +44,9 @@ pub struct MessagePayload {
     pub group_id: Option<String>,
     pub recipient_id: Option<String>,
     pub recipient_keys: std::collections::HashMap<String, String>, // user_id -> encrypted session key Base64
+    pub reply_to: Option<String>,      // ID of the message being replied to
+    pub mentions: Option<Vec<String>>, // List of mentioned user IDs
+    pub content_type: Option<String>,  // "text", "image", "file", "audio", "video", etc.
 }
 
 #[derive(Debug, Object, Serialize, Deserialize, Clone)]
