@@ -86,7 +86,26 @@ impl MessagesApi {
         };
         let key = format!("group:{}:ts:{:020}:{}", gid.0, timestamp, msg_id);
         let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-        state.msg_db.insert(key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        state.msg_db.insert(key, value.clone()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+
+        // 存储消息索引（用于按消息ID查找）
+        let idx_key = format!("msg_idx:{}", msg_id);
+        state.msg_db.insert(idx_key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+
+        // 存储@提及记录到数据库
+        for uid in &req.0.mentions {
+            if let Err(e) = sqlx::query(
+                "INSERT OR IGNORE INTO message_mentions (message_id, mentioned_user_id, channel_id) VALUES (?, ?, ?)"
+            )
+            .bind(&msg_id)
+            .bind(uid)
+            .bind(&gid.0)
+            .execute(&state.sql_pool)
+            .await
+            {
+                tracing::warn!("Failed to record mention for message {}: {}", msg_id, e);
+            }
+        }
 
         let event = RealtimeEvent::NewMessage { payload: req.0.clone(), timestamp };
         let _ = state.sender.send(event);
@@ -163,10 +182,41 @@ impl MessagesApi {
             reply_to_preview: req.0.reply_to_preview.clone(),
         };
         let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-        state.msg_db.insert(dm_key_prefix, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        state.msg_db.insert(dm_key_prefix, value.clone()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+
+        // 存储消息索引（用于按消息ID查找）
+        let idx_key = format!("msg_idx:{}", msg_id);
+        state.msg_db.insert(idx_key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+
+        // 存储@提及记录到数据库
+        for uid_mention in &req.0.mentions {
+            if let Err(e) = sqlx::query(
+                "INSERT OR IGNORE INTO message_mentions (message_id, mentioned_user_id) VALUES (?, ?)"
+            )
+            .bind(&msg_id)
+            .bind(uid_mention)
+            .execute(&state.sql_pool)
+            .await
+            {
+                tracing::warn!("Failed to record DM mention for message {}: {}", msg_id, e);
+            }
+        }
 
         let event = RealtimeEvent::DmMessage { payload: req.0.clone(), timestamp };
         let _ = state.sender.send(event);
+
+        // Broadcast mention events for each @mentioned user in DM
+        for mentioned_uid in &req.0.mentions {
+            let mention_event = RealtimeEvent::Mention {
+                message_id: msg_id.clone(),
+                sender_id: req.0.sender_id.clone(),
+                mentioned_user_id: mentioned_uid.clone(),
+                channel_id: None,
+                timestamp,
+            };
+            let _ = state.sender.send(mention_event);
+        }
+
         Ok(Json(msg_id))
     }
 
@@ -337,6 +387,7 @@ impl MessagesApi {
             reply_to: None,
             reply_to_preview: None,
             mentions: Vec::new(),
+            content_type: Some("text".to_string()),
         };
 
         // Store in sled
@@ -410,6 +461,28 @@ impl MessagesApi {
         let _ = state.sender.send(event);
         Ok(Json("ok".to_string()))
     }
+
+    /// 获取消息上下文（用于回复引用，通过消息 ID 查找）
+    #[oai(path = "/messages/context/:message_id", method = "get")]
+    async fn get_message_context(
+        &self,
+        state: Data<&AppState>,
+        message_id: Path<String>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<StoredMessage>> {
+        let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+
+        let idx_key = format!("msg_idx:{}", message_id.0);
+        let value = state.msg_db
+            .get(&idx_key)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?
+            .ok_or_else(|| poem::Error::from_string("Message not found", poem::http::StatusCode::NOT_FOUND))?;
+
+        let msg: StoredMessage = serde_json::from_slice(&value)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+
+        Ok(Json(msg))
+    }
 }
 
 #[derive(Debug, Object, Deserialize)]
@@ -417,9 +490,6 @@ pub struct TypingRequest {
     pub channel_id: Option<String>,
     pub recipient_id: Option<String>,
     pub is_typing: bool,
-}
-
-#[poem::handler]
 pub async fn sse_handler(
     state: Data<&AppState>,
 ) -> poem::web::sse::SSE {

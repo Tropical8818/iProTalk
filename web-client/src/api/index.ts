@@ -32,6 +32,9 @@ export interface StoredMessage {
         group_id: string | null
         recipient_id: string | null
         recipient_keys: Record<string, string>
+        reply_to?: string | null
+        mentions?: string[] | null
+        content_type?: string | null
     }
 }
 
@@ -54,7 +57,9 @@ export const messageApi = {
         content: string,
         senderId: string,
         recipientKeys: Record<string, string>,
-        nonce: string
+        nonce: string,
+        replyTo?: string,
+        mentions?: string[]
     ) => api.post(`/messages/group/${gid}`, {
         encrypted_blob: content,
         nonce,
@@ -62,6 +67,9 @@ export const messageApi = {
         group_id: gid,
         recipient_id: null,
         recipient_keys: recipientKeys,
+        reply_to: replyTo ?? null,
+        mentions: mentions && mentions.length > 0 ? mentions : null,
+        content_type: 'text',
     }),
 
     sendDM: (
@@ -69,7 +77,9 @@ export const messageApi = {
         content: string,
         senderId: string,
         recipientKeys: Record<string, string>,
-        nonce: string
+        nonce: string,
+        replyTo?: string,
+        mentions?: string[]
     ) => api.post(`/messages/dm/${targetUid}`, {
         encrypted_blob: content,
         nonce,
@@ -77,6 +87,9 @@ export const messageApi = {
         group_id: null,
         recipient_id: targetUid,
         recipient_keys: recipientKeys,
+        reply_to: replyTo ?? null,
+        mentions: mentions && mentions.length > 0 ? mentions : null,
+        content_type: 'text',
     }),
 
     getGroupHistory: (gid: string, limit = 50) =>
@@ -115,6 +128,9 @@ export const messageApi = {
 
     searchMessages: (q: string, channelId?: string, limit = 30) =>
         api.get<StoredMessage[]>('/messages/search', { params: { q, channel_id: channelId, limit } }),
+
+    getMessageContext: (messageId: string) =>
+        api.get<StoredMessage>(`/messages/context/${messageId}`),
 }
 
 
@@ -146,6 +162,9 @@ export interface MessageEventData {
         group_id: string | null
         recipient_id: string | null
         recipient_keys: Record<string, string>
+        reply_to?: string | null
+        mentions?: string[] | null
+        content_type?: string | null
     }
     timestamp: number
 }

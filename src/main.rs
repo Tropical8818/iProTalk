@@ -11,7 +11,6 @@ mod middleware;
 use api::{
     auth::AuthApi, keys::KeysApi, messages::MessagesApi, users::UsersApi,
     contacts::ContactsApi, files::FilesApi, admin::AdminApi, channels::ChannelsApi,
-<<<<<<< HEAD
     webhooks::WebhookApi, oauth::OAuthApi, audit::AuditApi, reactions::ReactionsApi, presence::PresenceApi,
 };
 use db::init_db;

@@ -53,6 +53,9 @@ pub struct MessagePayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[oai(default)]
     pub mentions: Vec<String>,             // @mentioned user IDs
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[oai(default)]
+    pub content_type: Option<String>,      // "text", "image", "file", "audio", "video", etc.
 }
 
 /// Generic realtime event sent over SSE.  All variants are serialised as JSON.

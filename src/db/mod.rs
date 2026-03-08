@@ -135,6 +135,14 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(message_id, user_id, emoji)
         )",
+        // Message mentions table
+        "CREATE TABLE IF NOT EXISTS message_mentions (
+            message_id TEXT NOT NULL,
+            mentioned_user_id TEXT NOT NULL,
+            channel_id TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(message_id, mentioned_user_id)
+        )",
     ];
 
     for stmt in additive_migrations {
