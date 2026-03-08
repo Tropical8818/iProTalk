@@ -7,6 +7,7 @@ use poem_openapi::Object;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use std::path::Path as FilePath;
+use bcrypt::{hash, verify, DEFAULT_COST};
 
 #[derive(Clone, Default)]
 pub struct UsersApi;
@@ -23,6 +24,17 @@ pub struct UserPublicKeyInfo {
 #[derive(Deserialize)]
 pub struct SearchQuery {
     pub q: Option<String>,
+}
+
+#[derive(Debug, Object, Deserialize)]
+pub struct UpdateMeReq {
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Object, Deserialize)]
+pub struct ChangePasswordReq {
+    pub old_password: String,
+    pub new_password: String,
 }
 
 #[OpenApi]
@@ -130,6 +142,67 @@ impl UsersApi {
             .map_err(InternalServerError)?;
 
         Ok(Json("Avatar updated".to_string()))
+    }
+
+    /// 修改自己的名字
+    #[oai(path = "/users/me", method = "put")]
+    async fn update_me(
+        &self,
+        state: Data<&AppState>,
+        req: Json<UpdateMeReq>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        let user_id = decode_user_id_from_token(&token)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        if let Some(new_name) = &req.0.name {
+            sqlx::query("UPDATE users SET name = ? WHERE id = ?")
+                .bind(new_name)
+                .bind(&user_id)
+                .execute(&state.sql_pool)
+                .await
+                .map_err(InternalServerError)?;
+        }
+
+        Ok(Json("Profile updated".to_string()))
+    }
+
+    /// 用户自行修改密码
+    #[oai(path = "/users/me/password", method = "put")]
+    async fn change_password(
+        &self,
+        state: Data<&AppState>,
+        req: Json<ChangePasswordReq>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        let user_id = decode_user_id_from_token(&token)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        let row = sqlx::query("SELECT password_hash FROM users WHERE id = ?")
+            .bind(&user_id)
+            .fetch_optional(&state.sql_pool)
+            .await
+            .map_err(InternalServerError)?;
+
+        if let Some(row) = row {
+            let current_hash: String = row.get("password_hash");
+            if verify(&req.0.old_password, &current_hash).map_err(InternalServerError)? {
+                let hashed = hash(&req.0.new_password, DEFAULT_COST).map_err(InternalServerError)?;
+                sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+                    .bind(&hashed)
+                    .bind(&user_id)
+                    .execute(&state.sql_pool)
+                    .await
+                    .map_err(InternalServerError)?;
+                Ok(Json("Password updated".to_string()))
+            } else {
+                 Err(poem::Error::from_string("Incorrect old password", poem::http::StatusCode::BAD_REQUEST))
+            }
+        } else {
+             Err(poem::Error::from_string("User not found", poem::http::StatusCode::NOT_FOUND))
+        }
     }
 }
 
