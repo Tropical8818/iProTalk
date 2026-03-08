@@ -86,7 +86,10 @@ impl MessagesApi {
         };
         let key = format!("group:{}:ts:{:020}:{}", gid.0, timestamp, msg_id);
         let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-        state.msg_db.insert(key, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        state.msg_db.insert(key.as_bytes(), value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        // Secondary index: msg_idx:{id} -> primary key, for edit/delete lookup
+        let idx_key = format!("msg_idx:{}", msg_id);
+        state.msg_db.insert(idx_key.as_bytes(), key.as_bytes()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
 
         let event = RealtimeEvent::NewMessage { payload: req.0.clone(), timestamp };
         let _ = state.sender.send(event);
@@ -163,7 +166,10 @@ impl MessagesApi {
             reply_to_preview: req.0.reply_to_preview.clone(),
         };
         let value = serde_json::to_vec(&stored).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-        state.msg_db.insert(dm_key_prefix, value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        state.msg_db.insert(dm_key_prefix.as_bytes(), value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        // Secondary index: msg_idx:{id} -> primary key, for edit/delete lookup
+        let idx_key = format!("msg_idx:{}", msg_id);
+        state.msg_db.insert(idx_key.as_bytes(), dm_key_prefix.as_bytes()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
 
         let event = RealtimeEvent::DmMessage { payload: req.0.clone(), timestamp };
         let _ = state.sender.send(event);
@@ -212,9 +218,30 @@ impl MessagesApi {
     ) -> Result<Json<String>> {
         let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
 
+        let timestamp = chrono::Utc::now().timestamp();
+
+        // Look up the primary key via secondary index
+        let idx_key = format!("msg_idx:{}", mid.0);
+        if let Ok(Some(primary_key_bytes)) = state.msg_db.get(idx_key.as_bytes()) {
+            if let Ok(primary_key) = std::str::from_utf8(&primary_key_bytes) {
+                // Load existing stored message to preserve id and timestamp
+                if let Ok(Some(existing_bytes)) = state.msg_db.get(primary_key.as_bytes()) {
+                    if let Ok(mut stored) = serde_json::from_slice::<StoredMessage>(&existing_bytes) {
+                        stored.payload = req.0.clone();
+                        stored.reply_to = req.0.reply_to.clone();
+                        stored.reply_to_preview = req.0.reply_to_preview.clone();
+                        let updated = serde_json::to_vec(&stored)
+                            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                        state.msg_db.insert(primary_key.as_bytes(), updated)
+                            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+                    }
+                }
+            }
+        }
+
         let event = RealtimeEvent::EditMessage {
             payload: req.0.clone(),
-            timestamp: chrono::Utc::now().timestamp(),
+            timestamp,
         };
         let _ = state.sender.send(event);
         Ok(Json(format!("Edited {}", mid.0)))
@@ -229,6 +256,17 @@ impl MessagesApi {
         #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
     ) -> Result<Json<String>> {
         let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+
+        // Look up and remove via secondary index
+        let idx_key = format!("msg_idx:{}", mid.0);
+        if let Ok(Some(primary_key_bytes)) = state.msg_db.get(idx_key.as_bytes()) {
+            if let Ok(primary_key) = std::str::from_utf8(&primary_key_bytes) {
+                state.msg_db.remove(primary_key.as_bytes())
+                    .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+            }
+        }
+        state.msg_db.remove(idx_key.as_bytes())
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
 
         let event = RealtimeEvent::DeleteMessage {
             message_id: mid.0.clone(),
@@ -351,7 +389,11 @@ impl MessagesApi {
             };
             let value = serde_json::to_vec(&stored)
                 .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-            state.msg_db.insert(key, value)
+            state.msg_db.insert(key.as_bytes(), value)
+                .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+            // Secondary index for edit/delete lookup
+            let idx_key = format!("msg_idx:{}", msg_id);
+            state.msg_db.insert(idx_key.as_bytes(), key.as_bytes())
                 .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
         }
 

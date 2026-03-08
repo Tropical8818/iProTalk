@@ -204,6 +204,20 @@ export const Chat = () => {
                 } catch { /* 无法解密此条消息 */ }
 
                 const senderName = userDirectory[p.sender_id]?.name || p.sender_id.slice(0, 8)
+                // Build replyTo from structured fields if available
+                let replyToInfo: ReplyInfo | undefined
+                if (storedMsg.reply_to) {
+                    // reply_to_preview is stored as "sender: preview text"
+                    const preview = storedMsg.reply_to_preview ?? ''
+                    const colonIdx = preview.indexOf(': ')
+                    const replySender = colonIdx >= 0 ? preview.slice(0, colonIdx) : ''
+                    const replyText = colonIdx >= 0 ? preview.slice(colonIdx + 2) : preview
+                    replyToInfo = {
+                        id: storedMsg.reply_to,
+                        sender: replySender,
+                        text: replyText,
+                    }
+                }
                 decryptedMsgs.push({
                     id: storedMsg.id,
                     timestamp: storedMsg.timestamp,
@@ -213,6 +227,7 @@ export const Chat = () => {
                     time: new Date(storedMsg.timestamp * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
                     isMe: p.sender_id === user.id,
                     isDecrypted,
+                    replyTo: replyToInfo,
                 })
             }
             setMessages(decryptedMsgs)
@@ -304,7 +319,11 @@ export const Chat = () => {
     }, [messages])
 
     // ===== 加密并发送消息 =====
-    const encryptAndSend = async (text: string, view: ViewKey) => {
+    const encryptAndSend = async (
+        text: string,
+        view: ViewKey,
+        opts?: { replyTo?: string; replyToPreview?: string; mentions?: string[] }
+    ) => {
         if (!user) return
         const privKeyB64 = localStorage.getItem('e2ee_private_key')
         if (!privKeyB64) throw new Error('缺少私钥')
@@ -323,9 +342,9 @@ export const Chat = () => {
         }
 
         if (view.type === 'channel') {
-            await messageApi.sendGroupMessage(view.id, encryptedBlob, user.id, recipientKeys, nonce)
+            await messageApi.sendGroupMessage(view.id, encryptedBlob, user.id, recipientKeys, nonce, opts)
         } else {
-            await messageApi.sendDM(view.uid, encryptedBlob, user.id, recipientKeys, nonce)
+            await messageApi.sendDM(view.uid, encryptedBlob, user.id, recipientKeys, nonce, opts)
         }
     }
 
@@ -376,11 +395,22 @@ export const Chat = () => {
         e.preventDefault()
         if (!input.trim() || loading || keysStatus !== 'ready') return
         setLoading(true)
-        const textToSend = replyTo
-            ? `[回复 ${replyTo.sender}]: ${input.trim()}`
-            : input.trim()
+        const textToSend = input.trim()
+        // Extract @mentioned user IDs from input (matches @name against userDirectory)
+        const mentionedIds: string[] = []
+        const mentionRegex = /@([\w\u4e00-\u9fa5]+)/g
+        let m
+        while ((m = mentionRegex.exec(textToSend)) !== null) {
+            const name = m[1]
+            const uid = Object.entries(userDirectory).find(([, u]) => u.name === name)?.[0]
+            if (uid) mentionedIds.push(uid)
+        }
         try {
-            await encryptAndSend(textToSend, currentView)
+            await encryptAndSend(textToSend, currentView, {
+                replyTo: replyTo?.id,
+                replyToPreview: replyTo ? `${replyTo.sender}: ${replyTo.text.slice(0, 80)}` : undefined,
+                mentions: mentionedIds.length > 0 ? mentionedIds : undefined,
+            })
             // Minimal optimistic UI or clear input
         } catch (err) {
             console.error('发送消息失败', err)
