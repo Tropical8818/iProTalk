@@ -28,8 +28,6 @@ import MessageSearch from './MessageSearch'
 import FileMessage from './FileMessage'
 import AnnouncementBanner from './AnnouncementBanner'
 import { requestNotificationPermission, sendDesktopNotification, setUnreadBadge, resetTitle } from '../lib/notifications'
-import Picker from '@emoji-mart/react'
-import emojiData from '@emoji-mart/data'
 
 // ===== 类型 =====
 interface ForwardInfo {
@@ -102,7 +100,6 @@ export const Chat = () => {
     const [showCreateChannel, setShowCreateChannel] = useState(false)
     const [hoveredMsg, setHoveredMsg] = useState<string | null>(null)
     const [showEmojiPicker, setShowEmojiPicker] = useState(false)
-    const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null)
 
     // --- Edit ---
     const [editingMsgId, setEditingMsgId] = useState<string | null>(null)
@@ -130,8 +127,6 @@ export const Chat = () => {
 
     const scrollRef = useRef<HTMLDivElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
-    const emojiPickerRef = useRef<HTMLDivElement>(null)
-
     const [prepareFile] = usePrepareFileMutation()
     const [uploadFileChunk] = useUploadFileChunkMutation()
 
