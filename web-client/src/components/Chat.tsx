@@ -28,6 +28,8 @@ import MessageSearch from './MessageSearch'
 import FileMessage from './FileMessage'
 import AnnouncementBanner from './AnnouncementBanner'
 import { requestNotificationPermission, sendDesktopNotification, setUnreadBadge, resetTitle } from '../lib/notifications'
+import Picker from '@emoji-mart/react'
+import emojiData from '@emoji-mart/data'
 
 // ===== 类型 =====
 interface ForwardInfo {
@@ -49,6 +51,7 @@ interface Message {
     replyTo?: ReplyInfo
     mentions?: string[]
     forwardInfo?: ForwardInfo
+    reactions?: Record<string, string[]>
 }
 
 type ViewKey = { type: 'channel'; id: string } | { type: 'dm'; uid: string; name: string }
@@ -98,6 +101,8 @@ export const Chat = () => {
     const [showMsgSearch, setShowMsgSearch] = useState(false)
     const [showCreateChannel, setShowCreateChannel] = useState(false)
     const [hoveredMsg, setHoveredMsg] = useState<string | null>(null)
+    const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+    const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null)
 
     // --- Edit ---
     const [editingMsgId, setEditingMsgId] = useState<string | null>(null)
@@ -125,6 +130,7 @@ export const Chat = () => {
 
     const scrollRef = useRef<HTMLDivElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const emojiPickerRef = useRef<HTMLDivElement>(null)
 
     const [prepareFile] = usePrepareFileMutation()
     const [uploadFileChunk] = useUploadFileChunkMutation()
@@ -547,7 +553,6 @@ export const Chat = () => {
         // Best-effort API call
         messageApi.markRead(msgId).catch(() => { })
     }, [])
-
     const openDM = (uid: string, name: string) => {
         setCurrentView({ type: 'dm', uid, name })
         if (!contacts.some(c => c.uid === uid)) {
@@ -1027,6 +1032,15 @@ export const Chat = () => {
                             className="p-1.5 text-slate-400 hover:text-indigo-400 transition-colors disabled:opacity-40 shrink-0 self-end mb-0.5"
                         >
                             <Paperclip className="w-5 h-5" />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setShowEmojiPicker(prev => !prev)}
+                            disabled={loading || keysStatus !== 'ready'}
+                            className="p-1.5 text-slate-400 hover:text-yellow-400 transition-colors disabled:opacity-40 shrink-0 self-end mb-0.5 text-lg leading-none"
+                            title="表情"
+                        >
+                            😊
                         </button>
                         <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
 

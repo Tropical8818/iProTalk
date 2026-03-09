@@ -62,9 +62,9 @@ export default function E2EESetup() {
 
         } catch (err: unknown) {
             if (err instanceof Error) {
-                setError(err.message || "发生了意外错误，请重试。");
+                setError(err.message || "发生意外错误，请重试。");
             } else {
-                setError("发生了意外错误，请重试。");
+                setError("发生意外错误，请重试。");
             }
         } finally {
             setLoading(false);
@@ -86,11 +86,11 @@ export default function E2EESetup() {
                 </div>
 
                 <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600 mb-2 text-center">
-                    {success ? "加密已就绪" : "加密您的聊天"}
+                    {success ? "加密已启用" : "保护您的聊天安全"}
                 </h2>
 
                 <p className="text-slate-600 dark:text-slate-300 text-center mb-8 font-medium">
-                    iProTalk 使用<b>端对端加密</b>保护您的消息安全。只有您和您的通话对象才能读取消息内容。
+                    iProTalk 使用<b>端对端加密</b>保护您的消息隐私，只有您和您的通讯对象才能阅读消息。
                 </p>
 
                 {error && (
@@ -113,7 +113,7 @@ export default function E2EESetup() {
                         ) : success ? (
                             <><ShieldCheck className="w-5 h-5" /> 已加密</>
                         ) : (
-                            <><KeyRound className="w-5 h-5" /> 初始化加密密钥</>
+                            <><KeyRound className="w-5 h-5" /> 初始化端对端加密</>
                         )}
                     </button>
                 </div>

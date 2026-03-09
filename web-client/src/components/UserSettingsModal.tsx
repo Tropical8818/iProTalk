@@ -146,6 +146,7 @@ export default function UserSettingsModal({ onClose }: UserSettingsModalProps) {
         }
     };
 
+
     if (!user) return null;
 
     return (
