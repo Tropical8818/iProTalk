@@ -213,6 +213,20 @@ export const Chat = () => {
                 } catch { /* 无法解密此条消息 */ }
 
                 const senderName = userDirectory[p.sender_id]?.name || p.sender_id.slice(0, 8)
+                // Build replyTo from structured fields if available
+                let replyToInfo: ReplyInfo | undefined
+                if (storedMsg.reply_to) {
+                    // reply_to_preview is stored as "sender: preview text"
+                    const preview = storedMsg.reply_to_preview ?? ''
+                    const colonIdx = preview.indexOf(': ')
+                    const replySender = colonIdx >= 0 ? preview.slice(0, colonIdx) : ''
+                    const replyText = colonIdx >= 0 ? preview.slice(colonIdx + 2) : preview
+                    replyToInfo = {
+                        id: storedMsg.reply_to,
+                        sender: replySender,
+                        text: replyText,
+                    }
+                }
                 decryptedMsgs.push({
                     id: storedMsg.id,
                     timestamp: storedMsg.timestamp,
@@ -224,6 +238,7 @@ export const Chat = () => {
                     isDecrypted,
                     mentions: p.mentions ?? undefined,
                     forwardInfo: p.forward_info,
+                    replyTo: replyToInfo,
                 })
             }
 
@@ -356,7 +371,11 @@ export const Chat = () => {
     }, [messages])
 
     // ===== 加密并发送消息 =====
-    const encryptAndSend = async (text: string, view: ViewKey, replyToId?: string, mentionIds?: string[]) => {
+    const encryptAndSend = async (
+        text: string,
+        view: ViewKey,
+        opts?: { replyTo?: string; replyToPreview?: string; mentions?: string[] }
+    ) => {
         if (!user) return
         const privKeyB64 = localStorage.getItem('e2ee_private_key')
         if (!privKeyB64) throw new Error('缺少私钥')
@@ -375,9 +394,9 @@ export const Chat = () => {
         }
 
         if (view.type === 'channel') {
-            await messageApi.sendGroupMessage(view.id, encryptedBlob, user.id, recipientKeys, nonce, replyToId, mentionIds)
+            await messageApi.sendGroupMessage(view.id, encryptedBlob, user.id, recipientKeys, nonce, opts)
         } else {
-            await messageApi.sendDM(view.uid, encryptedBlob, user.id, recipientKeys, nonce, replyToId, mentionIds)
+            await messageApi.sendDM(view.uid, encryptedBlob, user.id, recipientKeys, nonce, opts)
         }
     }
 
@@ -429,25 +448,21 @@ export const Chat = () => {
         if (!input.trim() || loading || keysStatus !== 'ready') return
         setLoading(true)
         const textToSend = input.trim()
-
-        // Extract @mentions from text and resolve to user IDs
-        const mentionedUserIds: string[] = []
-        const mentionMatches = [...textToSend.matchAll(/@(\S+)/g)]
-        for (const match of mentionMatches) {
-            const mentionName = match[1].replace(/[^\w\u4e00-\u9fa5]/g, '')
-            const entry = Object.entries(userDirectory).find(
-                ([, info]) => info.name.toLowerCase() === mentionName.toLowerCase()
-            )
-            if (entry) mentionedUserIds.push(entry[0])
+        // Extract @mentioned user IDs from input (matches @name against userDirectory)
+        const mentionedIds: string[] = []
+        const mentionRegex = /@([\w\u4e00-\u9fa5]+)/g
+        let m
+        while ((m = mentionRegex.exec(textToSend)) !== null) {
+            const name = m[1]
+            const uid = Object.entries(userDirectory).find(([, u]) => u.name === name)?.[0]
+            if (uid) mentionedIds.push(uid)
         }
-
         try {
-            await encryptAndSend(
-                textToSend,
-                currentView,
-                replyTo?.id,
-                mentionedUserIds.length > 0 ? mentionedUserIds : undefined
-            )
+            await encryptAndSend(textToSend, currentView, {
+                replyTo: replyTo?.id,
+                replyToPreview: replyTo ? `${replyTo.sender}: ${replyTo.text.slice(0, 80)}` : undefined,
+                mentions: mentionedIds.length > 0 ? mentionedIds : undefined,
+            })
             // Minimal optimistic UI or clear input
         } catch (err) {
             console.error('发送消息失败', err)

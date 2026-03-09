@@ -69,8 +69,7 @@ export const messageApi = {
         senderId: string,
         recipientKeys: Record<string, string>,
         nonce: string,
-        replyTo?: string,
-        mentions?: string[]
+        opts?: { replyTo?: string; replyToPreview?: string; mentions?: string[] }
     ) => api.post(`/messages/group/${gid}`, {
         encrypted_blob: content,
         nonce,
@@ -78,8 +77,9 @@ export const messageApi = {
         group_id: gid,
         recipient_id: null,
         recipient_keys: recipientKeys,
-        reply_to: replyTo ?? null,
-        mentions: mentions && mentions.length > 0 ? mentions : null,
+        reply_to: opts?.replyTo ?? null,
+        reply_to_preview: opts?.replyToPreview ?? null,
+        mentions: opts?.mentions ?? [],
         content_type: 'text',
     }),
 
@@ -89,8 +89,7 @@ export const messageApi = {
         senderId: string,
         recipientKeys: Record<string, string>,
         nonce: string,
-        replyTo?: string,
-        mentions?: string[]
+        opts?: { replyTo?: string; replyToPreview?: string; mentions?: string[] }
     ) => api.post(`/messages/dm/${targetUid}`, {
         encrypted_blob: content,
         nonce,
@@ -98,8 +97,9 @@ export const messageApi = {
         group_id: null,
         recipient_id: targetUid,
         recipient_keys: recipientKeys,
-        reply_to: replyTo ?? null,
-        mentions: mentions && mentions.length > 0 ? mentions : null,
+        reply_to: opts?.replyTo ?? null,
+        reply_to_preview: opts?.replyToPreview ?? null,
+        mentions: opts?.mentions ?? [],
         content_type: 'text',
     }),
 
@@ -154,9 +154,11 @@ export const messageApi = {
 
 export const reactionApi = {
     addReaction: (messageId: string, emoji: string) =>
-        api.post(`/messages/${messageId}/reaction`, { emoji }),
+        api.post(`/messages/${messageId}/reactions`, { emoji }),
     removeReaction: (messageId: string, emoji: string) =>
-        api.delete(`/messages/${messageId}/reaction`, { data: { emoji } }),
+        api.delete(`/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`),
+    getReactions: (messageId: string) =>
+        api.get(`/messages/${messageId}/reactions`),
 }
 
 export const usersApi = {
