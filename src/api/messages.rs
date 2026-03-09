@@ -414,7 +414,7 @@ impl MessagesApi {
 
         // First pass: collect all original messages from Sled
         let mut orig_messages: Vec<StoredMessage> = Vec::new();
-        let mut unique_sender_ids: Vec<String> = Vec::new();
+        let mut unique_sender_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for orig_id in &req.0.message_ids {
             let idx_key = format!("msg_idx:{}", orig_id);
             if let Some(primary_key_bytes) = state.msg_db.get(idx_key.as_bytes())
@@ -425,9 +425,7 @@ impl MessagesApi {
                         .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?
                     {
                         if let Ok(m) = serde_json::from_slice::<StoredMessage>(&msg_bytes) {
-                            if !unique_sender_ids.contains(&m.payload.sender_id) {
-                                unique_sender_ids.push(m.payload.sender_id.clone());
-                            }
+                            unique_sender_ids.insert(m.payload.sender_id.clone());
                             orig_messages.push(m);
                         }
                     }
@@ -436,7 +434,8 @@ impl MessagesApi {
         }
 
         // Batch fetch sender names in a single query
-        let sender_names = fetch_user_names(&state.sql_pool, &unique_sender_ids)
+        let unique_ids_vec: Vec<String> = unique_sender_ids.into_iter().collect();
+        let sender_names = fetch_user_names(&state.sql_pool, &unique_ids_vec)
             .await
             .map_err(InternalServerError)?;
 
@@ -511,7 +510,7 @@ impl MessagesApi {
 
         // First pass: collect all original messages and unique sender IDs
         let mut orig_messages: Vec<StoredMessage> = Vec::new();
-        let mut unique_sender_ids: Vec<String> = Vec::new();
+        let mut unique_sender_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for orig_id in &req.0.message_ids {
             let idx_key = format!("msg_idx:{}", orig_id);
             if let Some(primary_key_bytes) = state.msg_db.get(idx_key.as_bytes())
@@ -522,9 +521,7 @@ impl MessagesApi {
                         .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?
                     {
                         if let Ok(m) = serde_json::from_slice::<StoredMessage>(&msg_bytes) {
-                            if !unique_sender_ids.contains(&m.payload.sender_id) {
-                                unique_sender_ids.push(m.payload.sender_id.clone());
-                            }
+                            unique_sender_ids.insert(m.payload.sender_id.clone());
                             orig_messages.push(m);
                         }
                     }
@@ -533,7 +530,8 @@ impl MessagesApi {
         }
 
         // Batch fetch sender names in a single query
-        let sender_names = fetch_user_names(&state.sql_pool, &unique_sender_ids)
+        let unique_ids_vec: Vec<String> = unique_sender_ids.into_iter().collect();
+        let sender_names = fetch_user_names(&state.sql_pool, &unique_ids_vec)
             .await
             .map_err(InternalServerError)?;
 
