@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Hash, Users, MessageSquare, KeyRound, Settings, Paperclip, Plus, Search, Trash2, Reply, Smile, X, Edit3, Check, MoreVertical, Pin } from 'lucide-react'
+import { Send, Hash, Users, MessageSquare, KeyRound, Settings, Paperclip, Plus, Search, Trash2, Reply, Smile, X, Edit3, Check, Pin, Forward } from 'lucide-react'
 import { messageApi, reactionApi, subscribeToEvents, keyApi, usersApi, type StoredMessage } from '../api'
 import {
     generateKeyPair, exportPrivateKey, exportPublicKey,
@@ -30,6 +30,13 @@ import AnnouncementBanner from './AnnouncementBanner'
 import { requestNotificationPermission, sendDesktopNotification, setUnreadBadge, resetTitle } from '../lib/notifications'
 
 // ===== 类型 =====
+interface ForwardInfo {
+    original_message_id: string
+    original_sender_id: string
+    original_sender_name: string
+    original_timestamp: number
+}
+
 interface Message {
     id: string
     timestamp: number
@@ -40,6 +47,8 @@ interface Message {
     isMe: boolean
     isDecrypted: boolean
     replyTo?: ReplyInfo
+    mentions?: string[]
+    forwardInfo?: ForwardInfo
 }
 
 type ViewKey = { type: 'channel'; id: string } | { type: 'dm'; uid: string; name: string }
@@ -108,7 +117,7 @@ export const Chat = () => {
     // --- ContextMenu ---
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; msgId: string; text: string; isPinned: boolean; isMine: boolean } | null>(null)
     // --- Forward ---
-    const [forwardContent, setForwardContent] = useState<string | null>(null)
+    const [forwardMsgId, setForwardMsgId] = useState<string | null>(null)
     // --- Pinned messages ---
     const [pinnedMsgIds, setPinnedMsgIds] = useState<Set<string>>(new Set())
     // --- Unread count ---
@@ -213,8 +222,31 @@ export const Chat = () => {
                     time: new Date(storedMsg.timestamp * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
                     isMe: p.sender_id === user.id,
                     isDecrypted,
+                    mentions: p.mentions ?? undefined,
+                    forwardInfo: p.forward_info,
                 })
             }
+
+            // Build a map for reply context lookup
+            const msgById = new Map<string, { sender: string; text: string }>()
+            for (const msg of decryptedMsgs) {
+                msgById.set(msg.id, { sender: msg.sender, text: msg.text })
+            }
+
+            // Populate replyTo for messages that have reply_to
+            for (let i = 0; i < decryptedMsgs.length; i++) {
+                const replyToId = stored[i].payload.reply_to
+                if (replyToId) {
+                    const ref = msgById.get(replyToId)
+                    if (ref) {
+                        decryptedMsgs[i] = {
+                            ...decryptedMsgs[i],
+                            replyTo: { id: replyToId, sender: ref.sender, text: ref.text },
+                        }
+                    }
+                }
+            }
+
             setMessages(decryptedMsgs)
         } catch (e) {
             console.error('加载历史消息失败', e)
@@ -240,6 +272,15 @@ export const Chat = () => {
 
         const unsub = subscribeToEvents(async (msgData) => {
             const p = msgData.payload
+
+            // Handle mention notifications regardless of current view
+            if (msgData.event_type === 'mention') {
+                if (p.mentions?.includes(user.id)) {
+                    const senderName = userDirectory[p.sender_id]?.name || p.sender_id.slice(0, 8)
+                    sendDesktopNotification(`@提及 — ${senderName}`, '你在一条消息中被@提及')
+                }
+                return
+            }
 
             // 判断是否属于当前视图
             const isCurrentChannel = currentView.type === 'channel' && p.group_id === currentView.id
@@ -268,6 +309,14 @@ export const Chat = () => {
             } catch { /* ignore */ }
 
             setMessages(prev => {
+                // Look up reply context from existing messages
+                const replyToInfo: ReplyInfo | undefined = p.reply_to
+                    ? (() => {
+                        const ref = prev.find(m => m.id === p.reply_to)
+                        return ref ? { id: p.reply_to, sender: ref.sender, text: ref.text } : undefined
+                    })()
+                    : undefined
+
                 const newMsg: Message = {
                     id: `${msgData.timestamp}-${Math.random()}`,
                     timestamp: msgData.timestamp,
@@ -277,6 +326,9 @@ export const Chat = () => {
                     time: new Date(msgData.timestamp * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
                     isMe: p.sender_id === user.id,
                     isDecrypted,
+                    replyTo: replyToInfo,
+                    mentions: p.mentions ?? undefined,
+                    forwardInfo: p.forward_info,
                 }
                 // 去重
                 if (prev.some(m => m.id === newMsg.id)) return prev
@@ -304,7 +356,7 @@ export const Chat = () => {
     }, [messages])
 
     // ===== 加密并发送消息 =====
-    const encryptAndSend = async (text: string, view: ViewKey) => {
+    const encryptAndSend = async (text: string, view: ViewKey, replyToId?: string, mentionIds?: string[]) => {
         if (!user) return
         const privKeyB64 = localStorage.getItem('e2ee_private_key')
         if (!privKeyB64) throw new Error('缺少私钥')
@@ -323,9 +375,9 @@ export const Chat = () => {
         }
 
         if (view.type === 'channel') {
-            await messageApi.sendGroupMessage(view.id, encryptedBlob, user.id, recipientKeys, nonce)
+            await messageApi.sendGroupMessage(view.id, encryptedBlob, user.id, recipientKeys, nonce, replyToId, mentionIds)
         } else {
-            await messageApi.sendDM(view.uid, encryptedBlob, user.id, recipientKeys, nonce)
+            await messageApi.sendDM(view.uid, encryptedBlob, user.id, recipientKeys, nonce, replyToId, mentionIds)
         }
     }
 
@@ -376,11 +428,26 @@ export const Chat = () => {
         e.preventDefault()
         if (!input.trim() || loading || keysStatus !== 'ready') return
         setLoading(true)
-        const textToSend = replyTo
-            ? `[回复 ${replyTo.sender}]: ${input.trim()}`
-            : input.trim()
+        const textToSend = input.trim()
+
+        // Extract @mentions from text and resolve to user IDs
+        const mentionedUserIds: string[] = []
+        const mentionMatches = [...textToSend.matchAll(/@(\S+)/g)]
+        for (const match of mentionMatches) {
+            const mentionName = match[1].replace(/[^\w\u4e00-\u9fa5]/g, '')
+            const entry = Object.entries(userDirectory).find(
+                ([, info]) => info.name.toLowerCase() === mentionName.toLowerCase()
+            )
+            if (entry) mentionedUserIds.push(entry[0])
+        }
+
         try {
-            await encryptAndSend(textToSend, currentView)
+            await encryptAndSend(
+                textToSend,
+                currentView,
+                replyTo?.id,
+                mentionedUserIds.length > 0 ? mentionedUserIds : undefined
+            )
             // Minimal optimistic UI or clear input
         } catch (err) {
             console.error('发送消息失败', err)
@@ -730,9 +797,18 @@ export const Chat = () => {
                                             </div>
                                         )}
 
+                                        {/* 转发标识 */}
+                                        {msg.forwardInfo && (
+                                            <div className={`flex items-center gap-1 text-xs text-slate-400 mb-1 ${msg.isMe ? 'flex-row-reverse' : ''}`}>
+                                                <Forward className="w-3 h-3 shrink-0" />
+                                                <span>转发自 {msg.forwardInfo.original_sender_name}</span>
+                                            </div>
+                                        )}
+
                                         <div className={`inline-block px-3 py-2 rounded-2xl text-sm max-w-[75%] text-left break-words
                                             ${msg.isMe ? 'bg-indigo-600 text-white rounded-tr-sm' : 'bg-slate-800 text-slate-200 rounded-tl-sm'}
-                                            ${!msg.isDecrypted ? 'opacity-60 italic' : ''}`}
+                                            ${!msg.isDecrypted ? 'opacity-60 italic' : ''}
+                                            ${!msg.isMe && msg.mentions?.includes(user.id) ? 'ring-1 ring-yellow-400/60' : ''}`}
                                         >
                                             {fileMatch ? (
                                                 (() => {
@@ -852,11 +928,11 @@ export const Chat = () => {
 
                                                 {/* Forward button */}
                                                 <button
-                                                    onClick={() => setForwardContent(msg.text)}
+                                                    onClick={() => setForwardMsgId(msg.id)}
                                                     className="p-1.5 text-slate-400 hover:text-green-400 rounded transition-colors"
                                                     title="转发"
                                                 >
-                                                    <MoreVertical className="w-3.5 h-3.5" />
+                                                    <Forward className="w-3.5 h-3.5" />
                                                 </button>
 
                                                 {msg.isMe && !fileMatch && msg.isDecrypted && (
@@ -1005,12 +1081,12 @@ export const Chat = () => {
                     onClose={() => setShowMsgSearch(false)}
                 />
             )}
-            {forwardContent !== null && (
+            {forwardMsgId !== null && (
                 <ForwardModal
-                    content={forwardContent}
+                    messageId={forwardMsgId}
                     channels={remoteChannels.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }))}
                     contacts={contacts.map(c => ({ user_id: c.uid, name: c.name }))}
-                    onClose={() => setForwardContent(null)}
+                    onClose={() => setForwardMsgId(null)}
                 />
             )}
             {ctxMenu && (
@@ -1031,7 +1107,7 @@ export const Chat = () => {
                         if (msg) { setEditingMsgId(msg.id); setEditInput(msg.text) }
                         setCtxMenu(null)
                     } : undefined}
-                    onForward={() => { setForwardContent(ctxMenu.text); setCtxMenu(null) }}
+                    onForward={() => { setForwardMsgId(ctxMenu.msgId); setCtxMenu(null) }}
                     onPin={() => {
                         const cid = currentView.type === 'channel' ? currentView.id : null
                         messageApi.pinMessage(ctxMenu.msgId, cid, ctxMenu.text)

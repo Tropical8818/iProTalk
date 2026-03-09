@@ -6,13 +6,15 @@ use tracing_subscriber;
 mod api;
 mod db;
 mod models;
+mod middleware;
 
 use api::{
     auth::AuthApi, keys::KeysApi, messages::MessagesApi, users::UsersApi,
     contacts::ContactsApi, files::FilesApi, admin::AdminApi, channels::ChannelsApi,
-    webhooks::WebhookApi,
+    webhooks::WebhookApi, oauth::OAuthApi, audit::AuditApi, reactions::ReactionsApi, presence::PresenceApi,
 };
 use db::init_db;
+use middleware::rate_limit::RateLimitMiddleware;
 
 #[handler]
 fn health_check() -> impl IntoResponse {
@@ -40,7 +42,7 @@ async fn main() -> Result<(), std::io::Error> {
 
     // create the API service
     let api_service = poem_openapi::OpenApiService::new(
-        (AuthApi, KeysApi, MessagesApi, UsersApi, ContactsApi, FilesApi, AdminApi, ChannelsApi, WebhookApi),
+        (AuthApi, KeysApi, MessagesApi, UsersApi, ContactsApi, FilesApi, AdminApi, ChannelsApi, WebhookApi, OAuthApi, AuditApi, ReactionsApi, PresenceApi),
         "iProTalk API",
         "0.1.0",
     )
@@ -64,6 +66,7 @@ async fn main() -> Result<(), std::io::Error> {
         .nest("/docs", ui)
         .nest("/spec", spec)
         .with(cors)
+        .with(RateLimitMiddleware::new())
         .data(state);
 
     println!("Server starting at http://localhost:3000");

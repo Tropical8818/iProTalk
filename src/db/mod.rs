@@ -2,13 +2,19 @@ use sqlx::sqlite::SqlitePool;
 use sled::Db;
 use tokio::sync::broadcast;
 use anyhow::Result;
-use crate::models::MessageEvent;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use std::collections::HashMap;
+use crate::models::RealtimeEvent;
 
 #[derive(Clone)]
 pub struct AppState {
     pub sql_pool: SqlitePool,
     pub msg_db: Db,
-    pub sender: broadcast::Sender<MessageEvent>,
+    /// Broadcast channel for all realtime events (messages, reactions, typing, presence)
+    pub sender: broadcast::Sender<RealtimeEvent>,
+    /// Tracks online users: user_id -> last heartbeat unix timestamp
+    pub online_users: Arc<RwLock<HashMap<String, i64>>>,
 }
 
 pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> {
@@ -41,6 +47,24 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
         .execute(&sql_pool)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
+
+    // Run OAuth migration (statements separated; ignore duplicate column/index errors)
+    for stmt in include_str!("../../migrations/20260308000001_oauth.sql")
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let _ = sqlx::query(stmt).execute(&sql_pool).await;
+    }
+
+    // Run audit log migration
+    for stmt in include_str!("../../migrations/20260308000002_audit_log.sql")
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let _ = sqlx::query(stmt).execute(&sql_pool).await;
+    }
 
     // Create table for system settings
     sqlx::query(
@@ -100,23 +124,49 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
             assigned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, role, channel_id)
         )",
+        "ALTER TABLE users ADD COLUMN oauth_provider TEXT",
+        "ALTER TABLE users ADD COLUMN oauth_provider_id TEXT",
+        // Message reactions table
+        "CREATE TABLE IF NOT EXISTS message_reactions (
+            id TEXT PRIMARY KEY NOT NULL,
+            message_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            emoji TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(message_id, user_id, emoji)
+        )",
+        // Message mentions table
+        "CREATE TABLE IF NOT EXISTS message_mentions (
+            message_id TEXT NOT NULL,
+            mentioned_user_id TEXT NOT NULL,
+            channel_id TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(message_id, mentioned_user_id)
+        )",
     ];
 
     for stmt in additive_migrations {
-        // Ignore "duplicate column" errors; the column already exists
-        let _ = sqlx::query(stmt).execute(&sql_pool).await;
+        // Ignore "duplicate column" / "already exists" errors — the object was
+        // created on a previous startup. Log anything else for visibility.
+        if let Err(e) = sqlx::query(stmt).execute(&sql_pool).await {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") && !msg.contains("already exists") {
+                tracing::warn!("Additive migration skipped ({}): {}", &stmt[..stmt.len().min(60)], e);
+            }
+        }
     }
 
     // Initialize Sled
     let msg_db = sled::open(msg_db_path)
         .map_err(|e| anyhow::anyhow!("Failed to open Sled at {}: {}", msg_db_path, e))?;
 
-    // Initialize Broadcast Channel (Capacity 100)
-    let (sender, _) = broadcast::channel(100);
+    // Initialize Broadcast Channel (Capacity 256)
+    let (sender, _) = broadcast::channel(256);
 
     Ok(AppState {
         sql_pool,
         msg_db,
         sender,
+        online_users: Arc::new(RwLock::new(HashMap::new())),
     })
 }

@@ -8,3 +8,7 @@ pub mod admin;
 pub mod channels;
 pub mod webhooks;
 pub mod utils;
+pub mod oauth;
+pub mod audit;
+pub mod reactions;
+pub mod presence;

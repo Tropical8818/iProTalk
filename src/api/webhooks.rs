@@ -1,7 +1,7 @@
 use poem::{web::Data, Result, error::InternalServerError};
 use poem_openapi::{OpenApi, payload::Json, param::{Path, Header}, Object};
 use serde::{Deserialize, Serialize};
-use crate::{db::AppState, api::utils::decode_user_id_from_token, models::{MessagePayload, MessageEvent}};
+use crate::{db::AppState, api::utils::decode_user_id_from_token, models::{MessagePayload, RealtimeEvent}, api::audit::log_audit};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -147,26 +147,47 @@ impl WebhookApi {
             encrypted_blob: req.0.content,
             nonce: String::new(),
             sender_id: format!("webhook:{}", sender_name),
-            group_id: Some(channel_id),
+            group_id: Some(channel_id.clone()),
             recipient_id: None,
             recipient_keys: std::collections::HashMap::new(),
+            reply_to: None,
+            reply_to_preview: None,
+            mentions: Vec::new(),
+            content_type: Some("text".to_string()),
+            forward_info: None,
         };
 
-        let event = MessageEvent {
-            event_type: "new_message".to_string(),
+        let timestamp = chrono::Utc::now().timestamp();
+        let event = RealtimeEvent::NewMessage {
             payload: payload.clone(),
-            timestamp: chrono::Utc::now().timestamp(),
+            timestamp,
         };
 
         // Store in Sled
-        let stored = serde_json::to_vec(&event)
-            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+        let stored = serde_json::to_vec(&serde_json::json!({
+            "id": msg_id,
+            "timestamp": timestamp,
+            "payload": payload,
+        }))
+        .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
         state.msg_db
             .insert(msg_id.as_bytes(), stored)
             .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
 
         // Broadcast via SSE
         let _ = state.sender.send(event);
+
+        log_audit(
+            &state.sql_pool,
+            None,
+            "webhook",
+            "webhook.trigger",
+            Some("webhook"),
+            Some(&id.0),
+            Some(serde_json::json!({ "channel_id": channel_id })),
+            None,
+        )
+        .await;
 
         Ok(Json("Message sent via webhook".to_string()))
     }
