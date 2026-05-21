@@ -143,6 +143,23 @@ pub async fn init_db(database_url: &str, msg_db_path: &str) -> Result<AppState> 
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY(message_id, mentioned_user_id)
         )",
+        // Message reads table (tracks latest read message per user per channel)
+        "CREATE TABLE IF NOT EXISTS message_reads (
+            user_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            read_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(user_id, channel_id)
+        )",
+        "CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id TEXT PRIMARY KEY NOT NULL,
+            user_id TEXT NOT NULL,
+            endpoint TEXT NOT NULL,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, endpoint)
+        )",
     ];
 
     for stmt in additive_migrations {

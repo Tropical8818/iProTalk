@@ -136,7 +136,9 @@ impl WebhookApi {
         let channel_id: String = row.get("channel_id");
         let webhook_name: String = row.get("name");
 
-        if provided_secret != stored_secret {
+use subtle::ConstantTimeEq;
+
+        if provided_secret.as_bytes().ct_eq(stored_secret.as_bytes()).unwrap_u8() == 0 {
             return Err(poem::Error::from_string("Invalid secret", poem::http::StatusCode::UNAUTHORIZED));
         }
 
@@ -159,6 +161,7 @@ impl WebhookApi {
 
         let timestamp = chrono::Utc::now().timestamp();
         let event = RealtimeEvent::NewMessage {
+            message_id: msg_id.clone(),
             payload: payload.clone(),
             timestamp,
         };

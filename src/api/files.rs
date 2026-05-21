@@ -33,7 +33,7 @@ impl FilesApi {
     #[oai(path = "/files/prepare", method = "post")]
     async fn prepare_file(
         &self,
-        req: Json<PrepareFileReq>,
+        _req: Json<PrepareFileReq>,
         #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
     ) -> Result<Json<PrepareFileRes>> {
         let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;

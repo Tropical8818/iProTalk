@@ -1,6 +1,6 @@
 use poem::{web::{Data, Query}, Result, error::InternalServerError};
 use poem_openapi::{OpenApi, payload::Json, param::{Path, Header}};
-use crate::{db::AppState, models::{ForwardInfo, MessagePayload, RealtimeEvent}, api::utils::decode_user_id_from_token};
+use crate::{db::AppState, models::{ForwardInfo, MessagePayload, RealtimeEvent}, api::utils::decode_user_id_from_token, api::push::send_push_notification};
 use futures_util::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
@@ -38,6 +38,12 @@ pub struct ForwardCombinedRequest {
     pub message_ids: Vec<String>,
     pub target_type: String, // "user" | "channel" | "group"
     pub target_id: String,
+}
+
+#[derive(Debug, Object, Deserialize)]
+pub struct MarkReadRequest {
+    pub message_id: String,
+    pub channel_id: String,
 }
 
 #[derive(Deserialize)]
@@ -114,8 +120,35 @@ impl MessagesApi {
             }
         }
 
-        let event = RealtimeEvent::NewMessage { payload: req.0.clone(), timestamp };
+        let event = RealtimeEvent::NewMessage { message_id: msg_id.clone(), payload: req.0.clone(), timestamp };
         let _ = state.sender.send(event);
+
+        // Notify offline members via Push
+        let state_clone = state.0.clone();
+        let sender_id_push = req.0.sender_id.clone();
+        let gid_push = gid.0.clone();
+        tokio::spawn(async move {
+            let members_res = sqlx::query("SELECT user_id FROM group_members WHERE group_id = ?")
+                .bind(&gid_push)
+                .fetch_all(&state_clone.sql_pool)
+                .await;
+            
+            if let Ok(members) = members_res {
+                let online_users = state_clone.online_users.read().await;
+                for row in members {
+                    let member_id: String = row.get("user_id");
+                    if member_id != sender_id_push && !online_users.contains_key(&member_id) {
+                        let _ = send_push_notification(
+                            &state_clone, 
+                            &member_id, 
+                            "新群消息", 
+                            "你收到了一条新的频道消息", 
+                            &format!("/chat/channel/{}", gid_push)
+                        ).await;
+                    }
+                }
+            }
+        });
 
         // Broadcast mention events for each @mentioned user
         for mentioned_uid in &req.0.mentions {
@@ -208,9 +241,6 @@ impl MessagesApi {
             }
         }
 
-        let event = RealtimeEvent::DmMessage { payload: req.0.clone(), timestamp };
-        let _ = state.sender.send(event);
-
         // Broadcast mention events for each @mentioned user in DM
         for mentioned_uid in &req.0.mentions {
             let mention_event = RealtimeEvent::Mention {
@@ -222,6 +252,14 @@ impl MessagesApi {
             };
             let _ = state.sender.send(mention_event);
         }
+
+        // Broadcast DM message event
+        let dm_event = RealtimeEvent::DmMessage {
+            message_id: msg_id.clone(),
+            payload: req.0.clone(),
+            timestamp,
+        };
+        let _ = state.sender.send(dm_event);
 
         Ok(Json(msg_id))
     }
@@ -290,6 +328,7 @@ impl MessagesApi {
         }
 
         let event = RealtimeEvent::EditMessage {
+            message_id: mid.0.clone(),
             payload: req.0.clone(),
             timestamp,
         };
@@ -349,6 +388,13 @@ impl MessagesApi {
         .await
         .map_err(InternalServerError)?;
 
+        let event = RealtimeEvent::PinMessage {
+            message_id: req.0.message_id.clone(),
+            channel_id: req.0.channel_id.clone(),
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+        let _ = state.sender.send(event);
+
         Ok(Json("Pinned".to_string()))
     }
 
@@ -362,11 +408,26 @@ impl MessagesApi {
     ) -> Result<Json<String>> {
         let _token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
 
+        let row = sqlx::query("SELECT channel_id FROM pinned_messages WHERE id = ?")
+            .bind(&mid.0)
+            .fetch_optional(&state.sql_pool)
+            .await
+            .map_err(InternalServerError)?;
+
+        let channel_id: Option<String> = row.and_then(|r| r.try_get("channel_id").ok());
+
         sqlx::query("DELETE FROM pinned_messages WHERE id = ?")
             .bind(&mid.0)
             .execute(&state.sql_pool)
             .await
             .map_err(InternalServerError)?;
+
+        let event = RealtimeEvent::UnpinMessage {
+            message_id: mid.0.clone(),
+            channel_id,
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+        let _ = state.sender.send(event);
 
         Ok(Json("Unpinned".to_string()))
     }
@@ -473,7 +534,7 @@ impl MessagesApi {
                     state.msg_db.insert(dm_key.as_bytes(), value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
                     let new_idx_key = format!("msg_idx:{}", msg_id);
                     state.msg_db.insert(new_idx_key.as_bytes(), dm_key.as_bytes()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-                    event = RealtimeEvent::DmMessage { payload, timestamp };
+                    event = RealtimeEvent::DmMessage { message_id: msg_id.clone(), payload, timestamp };
                 }
                 _ => {
                     // "channel" or "group"
@@ -486,7 +547,7 @@ impl MessagesApi {
                     state.msg_db.insert(key.as_bytes(), value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
                     let new_idx_key = format!("msg_idx:{}", msg_id);
                     state.msg_db.insert(new_idx_key.as_bytes(), key.as_bytes()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-                    event = RealtimeEvent::NewMessage { payload, timestamp };
+                    event = RealtimeEvent::NewMessage { message_id: msg_id.clone(), payload, timestamp };
                 }
             }
             let _ = state.sender.send(event);
@@ -594,7 +655,7 @@ impl MessagesApi {
                 state.msg_db.insert(dm_key.as_bytes(), value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
                 let new_idx_key = format!("msg_idx:{}", msg_id);
                 state.msg_db.insert(new_idx_key.as_bytes(), dm_key.as_bytes()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-                event = RealtimeEvent::DmMessage { payload, timestamp };
+                event = RealtimeEvent::DmMessage { message_id: msg_id.clone(), payload, timestamp };
             }
             _ => {
                 let key = format!("group:{}:ts:{:020}:{}", req.0.target_id, timestamp, msg_id);
@@ -603,7 +664,7 @@ impl MessagesApi {
                 state.msg_db.insert(key.as_bytes(), value).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
                 let new_idx_key = format!("msg_idx:{}", msg_id);
                 state.msg_db.insert(new_idx_key.as_bytes(), key.as_bytes()).map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
-                event = RealtimeEvent::NewMessage { payload, timestamp };
+                event = RealtimeEvent::NewMessage { message_id: msg_id.clone(), payload, timestamp };
             }
         }
         let _ = state.sender.send(event);
@@ -658,6 +719,44 @@ impl MessagesApi {
             timestamp: chrono::Utc::now().timestamp(),
         };
         let _ = state.sender.send(event);
+        Ok(Json("ok".to_string()))
+    }
+
+    /// 标记消息为已读
+    #[oai(path = "/messages/read", method = "post")]
+    async fn mark_read(
+        &self,
+        state: Data<&AppState>,
+        req: Json<MarkReadRequest>,
+        #[oai(name = "Authorization")] auth_header: Header<Option<String>>,
+    ) -> Result<Json<String>> {
+        let token = auth_header.0.ok_or(poem::Error::from_string("Missing Auth Token", poem::http::StatusCode::FORBIDDEN))?;
+        let user_id = decode_user_id_from_token(&token)
+            .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::FORBIDDEN))?;
+
+        let timestamp = chrono::Utc::now().timestamp();
+
+        // 插入或更新已读记录
+        sqlx::query(
+            "INSERT INTO message_reads (user_id, channel_id, message_id) VALUES (?, ?, ?)
+             ON CONFLICT(user_id, channel_id) DO UPDATE SET message_id = excluded.message_id, read_at = CURRENT_TIMESTAMP"
+        )
+        .bind(&user_id)
+        .bind(&req.0.channel_id)
+        .bind(&req.0.message_id)
+        .execute(&state.sql_pool)
+        .await
+        .map_err(|e| poem::Error::from_string(e.to_string(), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?;
+
+        // 广播已读事件
+        let event = RealtimeEvent::ReadReceipt {
+            user_id,
+            message_id: req.0.message_id.clone(),
+            channel_id: req.0.channel_id.clone(),
+            timestamp,
+        };
+        let _ = state.sender.send(event);
+
         Ok(Json("ok".to_string()))
     }
 

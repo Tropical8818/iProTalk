@@ -3,7 +3,11 @@ import { useGetInvitesQuery, useCreateInviteMutation, useDeleteInviteMutation } 
 import { Link2, Trash2, Plus, Clock, Infinity as InfinityIcon, Copy, CheckCircle2, Loader2, Users } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function AdminInvites() {
+interface AdminInvitesProps {
+    compact?: boolean;
+}
+
+export default function AdminInvites({ compact = false }: AdminInvitesProps) {
     const { data: invites, isLoading } = useGetInvitesQuery();
     const [createInvite] = useCreateInviteMutation();
     const [deleteInvite] = useDeleteInviteMutation();
@@ -61,7 +65,7 @@ export default function AdminInvites() {
                         exit={{ opacity: 0, height: 0 }}
                         className="bg-slate-800/50 border border-slate-700 rounded-2xl p-5 overflow-hidden"
                     >
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div className={`grid grid-cols-1 gap-4 mb-4 ${compact ? '' : 'md:grid-cols-2 gap-6 mb-6'}`}>
                             <div>
                                 <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Max Uses</label>
                                 <select

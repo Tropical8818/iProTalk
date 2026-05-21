@@ -249,7 +249,8 @@ impl OAuthApi {
             Err(_) => return AuthorizeResponse::NotImplemented(Json("GitHub OAuth2 is not configured".to_string())),
         };
         let redirect_uri = std::env::var("GITHUB_REDIRECT_URI").unwrap_or_else(|_| {
-            "http://localhost:3000/api/auth/oauth2/github/callback".to_string()
+            let port = std::env::var("PORT").unwrap_or_else(|_| "3001".to_string());
+            format!("http://localhost:{}/api/auth/oauth2/github/callback", port)
         });
 
         let csrf_state = Uuid::new_v4().to_string();
@@ -283,7 +284,8 @@ impl OAuthApi {
             Err(_) => return CallbackResponse::NotImplemented(Json("GitHub OAuth2 is not configured".to_string())),
         };
         let redirect_uri = std::env::var("GITHUB_REDIRECT_URI").unwrap_or_else(|_| {
-            "http://localhost:3000/api/auth/oauth2/github/callback".to_string()
+            let port = std::env::var("PORT").unwrap_or_else(|_| "3001".to_string());
+            format!("http://localhost:{}/api/auth/oauth2/github/callback", port)
         });
 
         let code_val = match code.0 {
@@ -407,7 +409,8 @@ impl OAuthApi {
             Err(_) => return AuthorizeResponse::NotImplemented(Json("Google OAuth2 is not configured".to_string())),
         };
         let redirect_uri = std::env::var("GOOGLE_REDIRECT_URI").unwrap_or_else(|_| {
-            "http://localhost:3000/api/auth/oauth2/google/callback".to_string()
+            let port = std::env::var("PORT").unwrap_or_else(|_| "3001".to_string());
+            format!("http://localhost:{}/api/auth/oauth2/google/callback", port)
         });
 
         let csrf_state = Uuid::new_v4().to_string();
@@ -441,7 +444,8 @@ impl OAuthApi {
             Err(_) => return CallbackResponse::NotImplemented(Json("Google OAuth2 is not configured".to_string())),
         };
         let redirect_uri = std::env::var("GOOGLE_REDIRECT_URI").unwrap_or_else(|_| {
-            "http://localhost:3000/api/auth/oauth2/google/callback".to_string()
+            let port = std::env::var("PORT").unwrap_or_else(|_| "3001".to_string());
+            format!("http://localhost:{}/api/auth/oauth2/google/callback", port)
         });
 
         let code_val = match code.0 {

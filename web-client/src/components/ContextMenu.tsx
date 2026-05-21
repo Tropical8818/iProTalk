@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Edit2, Reply, Forward, Pin, PinOff, Trash2 } from 'lucide-react';
+import { Edit2, Reply, Forward, Pin, PinOff, Trash2, MessageSquare } from 'lucide-react';
 
 export interface ContextMenuAction {
     label: string;
@@ -23,12 +23,13 @@ interface ContextMenuProps {
     onPin?: () => void;
     onUnpin?: () => void;
     onDelete?: () => void;
+    onOpenThread?: () => void;
 }
 
 export default function ContextMenu({
     x, y, visible,
     isPinned, isMine,
-    onClose, onEdit, onReply, onForward, onPin, onUnpin, onDelete,
+    onClose, onEdit, onReply, onForward, onPin, onUnpin, onDelete, onOpenThread,
 }: ContextMenuProps) {
     const menuRef = useRef<HTMLDivElement>(null);
 
@@ -47,6 +48,7 @@ export default function ContextMenu({
     const safeY = Math.min(y, window.innerHeight - 280);
 
     const items: ContextMenuAction[] = [
+        { label: '查看话题', icon: <MessageSquare size={14} />, onClick: () => { onOpenThread?.(); onClose(); }, hidden: !onOpenThread },
         { label: '回复', icon: <Reply size={14} />, onClick: () => { onReply?.(); onClose(); }, hidden: !onReply },
         { label: '编辑', icon: <Edit2 size={14} />, onClick: () => { onEdit?.(); onClose(); }, hidden: !isMine || !onEdit },
         { label: '转发', icon: <Forward size={14} />, onClick: () => { onForward?.(); onClose(); }, hidden: !onForward },

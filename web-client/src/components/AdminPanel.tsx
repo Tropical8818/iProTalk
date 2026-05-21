@@ -15,7 +15,11 @@ export interface AdminUser {
 
 type AdminTab = 'users' | 'invites' | 'webhooks';
 
-export default function AdminPanel() {
+interface AdminPanelProps {
+    compact?: boolean;
+}
+
+export default function AdminPanel({ compact = false }: AdminPanelProps) {
     const { data: users, isLoading, error } = useGetUsersQuery({});
     const { data: regSetting, refetch: refetchRegSetting } = useGetRegistrationSettingQuery();
     const { data: serverStats } = useGetServerStatsQuery();
@@ -90,34 +94,34 @@ export default function AdminPanel() {
     };
 
     return (
-        <div className="space-y-8">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className={compact ? "space-y-6" : "space-y-8"}>
+            <div className={`flex flex-col gap-4 ${compact ? '' : 'md:flex-row md:items-center justify-between'}`}>
                 <div className="flex items-center gap-3">
                     <div className="p-2.5 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-400">
                         <Shield className="w-6 h-6" />
                     </div>
                     <div>
-                        <h3 className="text-2xl font-bold text-white tracking-tight">System Administration</h3>
-                        <p className="text-slate-400">Manage all users, settings, and workspace metrics</p>
+                        <h3 className={`${compact ? 'text-xl' : 'text-2xl'} font-bold text-white tracking-tight`}>System Administration</h3>
+                        <p className="text-slate-400 text-sm">Manage all users, settings, and workspace metrics</p>
                     </div>
                 </div>
 
-                <div className="flex p-1 bg-slate-900 border border-slate-800 rounded-xl">
+                <div className="flex p-1 bg-slate-900 border border-slate-800 rounded-xl self-start md:self-auto">
                     <button
                         onClick={() => setActiveTab('users')}
-                        className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'users' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:text-white'}`}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'users' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:text-white'}`}
                     >
                         <Users className="w-4 h-4" /> Users
                     </button>
                     <button
                         onClick={() => setActiveTab('invites')}
-                        className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'invites' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:text-white'}`}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'invites' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:text-white'}`}
                     >
                         <Link2 className="w-4 h-4" /> Invites
                     </button>
                     <button
                         onClick={() => setActiveTab('webhooks')}
-                        className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'webhooks' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:text-white'}`}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'webhooks' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:text-white'}`}
                     >
                         <Webhook className="w-4 h-4" /> Webhooks
                     </button>
@@ -125,35 +129,35 @@ export default function AdminPanel() {
             </div>
 
             {/* Server Overview Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex items-center gap-5 relative overflow-hidden group">
+            <div className={`grid gap-4 ${compact ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 md:grid-cols-3'}`}>
+                <div className={`bg-slate-900 border border-slate-800 rounded-2xl flex items-center relative overflow-hidden group ${compact ? 'p-4 gap-4' : 'p-5 gap-5'}`}>
                     <div className="absolute inset-0 bg-linear-to-br from-indigo-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                    <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 shrink-0 border border-indigo-500/20">
-                        <Users className="w-7 h-7" />
+                    <div className={`rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 shrink-0 border border-indigo-500/20 ${compact ? 'w-12 h-12' : 'w-14 h-14'}`}>
+                        <Users className={compact ? 'w-6 h-6' : 'w-7 h-7'} />
                     </div>
                     <div>
                         <p className="text-xs text-slate-400 font-semibold tracking-wider uppercase mb-1">Total Users</p>
-                        <p className="text-3xl font-bold text-white">{serverStats?.total_users || 0}</p>
+                        <p className={`${compact ? 'text-2xl' : 'text-3xl'} font-bold text-white`}>{serverStats?.total_users || 0}</p>
                     </div>
                 </div>
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex items-center gap-5 relative overflow-hidden group">
+                <div className={`bg-slate-900 border border-slate-800 rounded-2xl flex items-center relative overflow-hidden group ${compact ? 'p-4 gap-4' : 'p-5 gap-5'}`}>
                     <div className="absolute inset-0 bg-linear-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                    <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-400 shrink-0 border border-emerald-500/20">
-                        <Hash className="w-7 h-7" />
+                    <div className={`rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-400 shrink-0 border border-emerald-500/20 ${compact ? 'w-12 h-12' : 'w-14 h-14'}`}>
+                        <Hash className={compact ? 'w-6 h-6' : 'w-7 h-7'} />
                     </div>
                     <div>
                         <p className="text-xs text-slate-400 font-semibold tracking-wider uppercase mb-1">Total Channels</p>
-                        <p className="text-3xl font-bold text-white">{serverStats?.total_channels || 0}</p>
+                        <p className={`${compact ? 'text-2xl' : 'text-3xl'} font-bold text-white`}>{serverStats?.total_channels || 0}</p>
                     </div>
                 </div>
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex items-center gap-5 relative overflow-hidden group">
+                <div className={`bg-slate-900 border border-slate-800 rounded-2xl flex items-center relative overflow-hidden group ${compact ? 'p-4 gap-4' : 'p-5 gap-5'}`}>
                     <div className="absolute inset-0 bg-linear-to-br from-purple-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                    <div className="w-14 h-14 rounded-2xl bg-purple-500/10 flex items-center justify-center text-purple-400 shrink-0 border border-purple-500/20">
-                        <MessageCircle className="w-7 h-7" />
+                    <div className={`rounded-2xl bg-purple-500/10 flex items-center justify-center text-purple-400 shrink-0 border border-purple-500/20 ${compact ? 'w-12 h-12' : 'w-14 h-14'}`}>
+                        <MessageCircle className={compact ? 'w-6 h-6' : 'w-7 h-7'} />
                     </div>
                     <div>
                         <p className="text-xs text-slate-400 font-semibold tracking-wider uppercase mb-1">Total Messages</p>
-                        <p className="text-3xl font-bold text-white">{serverStats?.total_messages || 0}</p>
+                        <p className={`${compact ? 'text-2xl' : 'text-3xl'} font-bold text-white`}>{serverStats?.total_messages || 0}</p>
                     </div>
                 </div>
             </div>
@@ -189,8 +193,8 @@ export default function AdminPanel() {
                         </div>
 
                         {/* Users List */}
-                        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col">
-                            <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-950/50">
+                        <div className="bg-slate-900 border border-slate-800 rounded-2xl flex flex-col">
+                            <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-950/50 rounded-t-2xl">
                                 <h4 className="text-lg font-semibold text-white">User Directory</h4>
                                 <div className="relative w-full sm:w-72">
                                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
@@ -204,7 +208,7 @@ export default function AdminPanel() {
                                 </div>
                             </div>
 
-                            <div className="divide-y divide-slate-800/50 max-h-[500px] overflow-y-auto custom-scrollbar">
+                            <div className={`divide-y divide-slate-800/50 ${compact ? '' : 'max-h-[500px] overflow-y-auto custom-scrollbar'}`}>
                                 {filteredUsers.length === 0 ? (
                                     <div className="p-12 text-center text-slate-500">No users found.</div>
                                 ) : (
@@ -234,7 +238,7 @@ export default function AdminPanel() {
                                                     {activeDropdown === u.id && (
                                                         <div ref={dropdownRef} className="absolute right-0 top-full mt-2 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 py-1 overflow-hidden">
                                                             <button onClick={() => { setActiveDropdown(null); setResetPwModalData({ id: u.id, name: u.name }); }} className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700 text-left transition-colors">
-                                                                <KeyRound className="w-4 h-4" /> Reset Password
+                                                                 <KeyRound className="w-4 h-4" /> Reset Password
                                                             </button>
                                                             <button onClick={() => { toggleAdmin(u.id); setActiveDropdown(null); }} className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700 text-left transition-colors">
                                                                 <Shield className="w-4 h-4" /> {u.is_admin ? 'Remove Admin' : 'Make Admin'}
@@ -260,13 +264,13 @@ export default function AdminPanel() {
 
                 {activeTab === 'invites' && (
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                        <AdminInvites />
+                        <AdminInvites compact={compact} />
                     </motion.div>
                 )}
 
                 {activeTab === 'webhooks' && (
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                        <AdminWebhooks />
+                        <AdminWebhooks compact={compact} />
                     </motion.div>
                 )}
             </div>

@@ -42,17 +42,26 @@ impl AuthApi {
             return Err(poem::Error::from_string("Registration is currently disabled by administrator.", poem::http::StatusCode::FORBIDDEN));
         }
 
+        // Check if this is the first user
+        let user_count_row = sqlx::query("SELECT COUNT(*) as count FROM users")
+            .fetch_one(&state.sql_pool)
+            .await
+            .map_err(InternalServerError)?;
+        let user_count: i64 = user_count_row.get("count");
+        let is_first_user = user_count == 0;
+
         let user_id = Uuid::new_v4().to_string();
         let hashed = hash(&req.0.password, DEFAULT_COST).map_err(InternalServerError)?;
 
         // Insert into DB
         let result = sqlx::query(
-            "INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)"
+            "INSERT INTO users (id, email, password_hash, name, is_admin) VALUES (?, ?, ?, ?, ?)"
         )
         .bind(&user_id)
         .bind(&req.0.email)
         .bind(&hashed)
         .bind(&req.0.name)
+        .bind(is_first_user)
         .execute(&state.sql_pool)
         .await;
 
@@ -64,7 +73,7 @@ impl AuthApi {
                     user_id,
                     name: req.0.name,
                     e2ee_initialized: false,
-                    is_admin: false,
+                    is_admin: is_first_user,
                 }))
             },
             Err(e) => {

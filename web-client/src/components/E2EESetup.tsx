@@ -13,9 +13,10 @@ export default function E2EESetup() {
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState(false);
 
+    const user = useSelector((state: RootState) => state.auth.user);
     const storeToken = useSelector((state: RootState) => state.auth.token);
     const token = storeToken || localStorage.getItem('token');
-    const e2eeInitialized = useSelector((state: RootState) => state.auth.user?.e2ee_initialized);
+    const e2eeInitialized = user?.e2ee_initialized;
 
     useEffect(() => {
         if (e2eeInitialized) {
@@ -27,6 +28,8 @@ export default function E2EESetup() {
         setLoading(true);
         setError(null);
         try {
+            if (!user) throw new Error("未登录，请重新登录。");
+
             // 1. Generate keys
             const keyPair = await generateKeyPair();
 
@@ -35,8 +38,8 @@ export default function E2EESetup() {
 
             // 3. Keep private key in localStorage
             const b64PrivateKey = await exportPrivateKey(keyPair.privateKey);
-            localStorage.setItem("e2ee_private_key", b64PrivateKey);
-            localStorage.setItem("e2ee_public_key", b64PublicKey);
+            localStorage.setItem(`e2ee_private_key_${user.id}`, b64PrivateKey);
+            localStorage.setItem(`e2ee_public_key_${user.id}`, b64PublicKey);
 
             // 4. Upload public key to API
             if (!token) throw new Error("未登录，请重新登录。");

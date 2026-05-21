@@ -12,6 +12,7 @@ use api::{
     auth::AuthApi, keys::KeysApi, messages::MessagesApi, users::UsersApi,
     contacts::ContactsApi, files::FilesApi, admin::AdminApi, channels::ChannelsApi,
     webhooks::WebhookApi, oauth::OAuthApi, audit::AuditApi, reactions::ReactionsApi, presence::PresenceApi,
+    push::PushApi,
 };
 use db::init_db;
 use middleware::rate_limit::RateLimitMiddleware;
@@ -27,6 +28,8 @@ fn health_check() -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
+    dotenvy::dotenv().ok();
+
     // Initialize logging
     if std::env::var_os("RUST_LOG").is_none() {
         std::env::set_var("RUST_LOG", "poem=debug");
@@ -40,13 +43,16 @@ async fn main() -> Result<(), std::io::Error> {
     // Initialize Database
     let state = init_db(&database_url, &msg_db_path).await.expect("Failed to init DB");
 
+    let port = env::var("PORT").unwrap_or_else(|_| "3001".to_string());
+    let bind_addr = format!("0.0.0.0:{}", port);
+
     // create the API service
     let api_service = poem_openapi::OpenApiService::new(
-        (AuthApi, KeysApi, MessagesApi, UsersApi, ContactsApi, FilesApi, AdminApi, ChannelsApi, WebhookApi, OAuthApi, AuditApi, ReactionsApi, PresenceApi),
+        (AuthApi, KeysApi, MessagesApi, UsersApi, ContactsApi, FilesApi, AdminApi, ChannelsApi, WebhookApi, OAuthApi, AuditApi, ReactionsApi, PresenceApi, PushApi),
         "iProTalk API",
         "0.1.0",
     )
-    .server("http://localhost:3000/api");
+    .server(format!("http://localhost:{}/api", port));
 
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();
@@ -69,8 +75,8 @@ async fn main() -> Result<(), std::io::Error> {
         .with(RateLimitMiddleware::new())
         .data(state);
 
-    println!("Server starting at http://localhost:3000");
-    Server::new(TcpListener::bind("0.0.0.0:3000"))
+    println!("Server starting at http://localhost:{}", port);
+    Server::new(TcpListener::bind(&bind_addr))
         .run(app)
         .await
 }

@@ -2,40 +2,101 @@ import { useState, useCallback } from 'react';
 import { Search, X, MessageCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { messageApi, StoredMessage } from '../api/index';
+import { importPrivateKey, importPublicKey, deriveSharedSecret, decryptSessionKey, decryptMessage } from '../lib/crypto';
 
 interface MessageSearchProps {
     channelId?: string;
+    dmUid?: string;
+    userDirectory: Record<string, { name: string; publicKey: string | null }>;
+    currentUser: { id: string };
     onClose: () => void;
     onJumpTo?: (messageId: string) => void;
 }
 
-function formatTimestamp(ts: number) {
-    return new Date(ts * 1000).toLocaleString('zh-CN', {
-        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-    });
+interface DecryptedSearchResult {
+    id: string;
+    timestamp: number;
+    senderName: string;
+    text: string;
 }
 
-export default function MessageSearch({ channelId, onClose, onJumpTo }: MessageSearchProps) {
+export default function MessageSearch({ channelId, dmUid, userDirectory, currentUser, onClose, onJumpTo }: MessageSearchProps) {
     const [query, setQuery] = useState('');
-    const [results, setResults] = useState<StoredMessage[]>([]);
+    const [results, setResults] = useState<DecryptedSearchResult[]>([]);
     const [loading, setLoading] = useState(false);
+    const [searchingDeep, setSearchingDeep] = useState(false);
 
-    const doSearch = useCallback(async (q: string) => {
+    const decryptBatch = useCallback(async (msgs: StoredMessage[]): Promise<DecryptedSearchResult[]> => {
+        const privKeyB64 = localStorage.getItem(`e2ee_private_key_${currentUser.id}`);
+        const myPrivKey = privKeyB64 ? await importPrivateKey(privKeyB64) : null;
+        const sharedSecrets = new Map<string, CryptoKey>();
+
+        const decrypted = await Promise.all(msgs.map(async (stored) => {
+            const p = stored.payload;
+            let text = '[无法解密]';
+            
+            if (p.nonce === 'plaintext') {
+                text = p.encrypted_blob;
+            } else if (myPrivKey) {
+                try {
+                    const encKey = p.recipient_keys?.[currentUser.id];
+                    if (encKey) {
+                        const senderInfo = userDirectory[p.sender_id];
+                        if (senderInfo && senderInfo.publicKey) {
+                            let shared = sharedSecrets.get(p.sender_id);
+                            if (!shared) {
+                                const pub = await importPublicKey(senderInfo.publicKey);
+                                shared = await deriveSharedSecret(myPrivKey, pub);
+                                sharedSecrets.set(p.sender_id, shared);
+                            }
+                            const sessKey = await decryptSessionKey(encKey, shared);
+                            text = await decryptMessage(sessKey, p.encrypted_blob, p.nonce);
+                        }
+                    }
+                } catch { /* ignore */ }
+            }
+            return {
+                id: stored.id,
+                timestamp: stored.timestamp,
+                senderName: userDirectory[p.sender_id]?.name || p.sender_id.slice(0, 8),
+                text
+            };
+        }));
+        return decrypted;
+    }, [currentUser.id, userDirectory]);
+
+    const handleSearch = useCallback(async (q: string, deep = false) => {
         if (q.trim().length < 2) { setResults([]); return; }
-        setLoading(true);
+        if (deep) setSearchingDeep(true); else setLoading(true);
+
         try {
-            const res = await messageApi.searchMessages(q, channelId);
-            setResults(res.data);
-        } catch {
-            setResults([]);
+            // Fetch history (either specific channel or DM)
+            let stored: StoredMessage[] = [];
+            if (channelId) {
+                const res = await messageApi.getGroupHistory(channelId);
+                stored = res.data;
+            } else if (dmUid) {
+                const res = await messageApi.getDMHistory(dmUid);
+                stored = res.data;
+            }
+
+            const decrypted = await decryptBatch(stored);
+            const filtered = decrypted.filter(m =>
+                m.text.toLowerCase().includes(q.toLowerCase()) ||
+                m.senderName.toLowerCase().includes(q.toLowerCase())
+            );
+            setResults(filtered);
+        } catch (e) {
+            console.error('Search error', e);
         } finally {
             setLoading(false);
+            setSearchingDeep(false);
         }
-    }, [channelId]);
+    }, [channelId, dmUid, decryptBatch]);
 
     const handleChange = (v: string) => {
         setQuery(v);
-        doSearch(v);
+        handleSearch(v, false);
     };
 
     return (
@@ -66,11 +127,20 @@ export default function MessageSearch({ channelId, onClose, onJumpTo }: MessageS
                     {/* Results */}
                     <div className="max-h-[400px] overflow-y-auto">
                         {loading ? (
-                            <div className="py-8 text-center text-slate-500 text-sm">搜索中...</div>
+                            <div className="py-8 text-center text-slate-500 text-sm">正在加载并解密消息...</div>
                         ) : results.length === 0 && query.length >= 2 ? (
-                            <div className="py-8 text-center text-slate-500 text-sm">没有找到相关消息</div>
+                            <div className="py-12 text-center text-slate-500 text-sm flex flex-col items-center gap-4">
+                                <span>当前缓存中没有找到相关点消息</span>
+                                <button
+                                    onClick={() => handleSearch(query, true)}
+                                    disabled={searchingDeep}
+                                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-400 rounded-lg border border-slate-700 transition-all disabled:opacity-50"
+                                >
+                                    {searchingDeep ? '正在深度搜索...' : '开启深度搜索 (检索历史记录)'}
+                                </button>
+                            </div>
                         ) : results.length === 0 ? (
-                            <div className="py-8 text-center text-slate-500 text-sm">输入关键字开始搜索</div>
+                            <div className="py-8 text-center text-slate-500 text-sm">输入关键字开始搜索 (支持内容与发送者)</div>
                         ) : (
                             results.map(msg => (
                                 <button
@@ -82,8 +152,13 @@ export default function MessageSearch({ channelId, onClose, onJumpTo }: MessageS
                                         <MessageCircle size={14} className="text-slate-400" />
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                        <p className="text-xs text-slate-400 mb-0.5">{formatTimestamp(msg.timestamp)}</p>
-                                        <p className="text-sm text-slate-200 truncate">{msg.payload.encrypted_blob}</p>
+                                        <div className="flex justify-between items-baseline mb-0.5">
+                                            <span className="text-sm font-semibold text-white">{msg.senderName}</span>
+                                            <span className="text-[10px] text-slate-500">{new Date(msg.timestamp * 1000).toLocaleString()}</span>
+                                        </div>
+                                        <p className="text-sm text-slate-300 line-clamp-2">
+                                            {msg.text}
+                                        </p>
                                     </div>
                                 </button>
                             ))

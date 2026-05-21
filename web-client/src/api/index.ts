@@ -120,7 +120,6 @@ export const messageApi = {
         recipient_keys: Record<string, string>
     }) => api.put(`/messages/${mid}/edit`, payload),
 
-    markRead: (messageId: string) => api.post(`/messages/${messageId}/read`),
 
     pinMessage: (messageId: string, channelId: string | null, content: string) =>
         api.post('/messages/pin', { message_id: messageId, channel_id: channelId, content }),
@@ -149,6 +148,10 @@ export const messageApi = {
 
     getMessageContext: (messageId: string) =>
         api.get<StoredMessage>(`/messages/context/${messageId}`),
+    sendTyping: (isTyping: boolean, channelId?: string, recipientId?: string) =>
+        api.post('/messages/typing', { is_typing: isTyping, channel_id: channelId, recipient_id: recipientId }),
+    markRead: (messageId: string, channelId: string) =>
+        api.post('/messages/read', { message_id: messageId, channel_id: channelId }),
 }
 
 
@@ -166,6 +169,9 @@ export const usersApi = {
     searchUsers: (q: string) => api.get<Array<{ user_id: string; name: string; email?: string; public_key: string | null }>>('/users/search', { params: { q } }),
     updateMe: (data: { name?: string }) => api.put('/users/me', data),
     changePassword: (data: { old_password: string; new_password: string }) => api.put('/users/me/password', data),
+    heartbeat: () => api.post('/users/heartbeat'),
+    goOffline: () => api.post('/users/offline'),
+    getOnlineUsers: () => api.get<Array<{ user_id: string; last_seen: number }>>('/users/online'),
 }
 
 export const keyApi = {
@@ -173,9 +179,15 @@ export const keyApi = {
     getKeys: (userId: string) => api.get(`/users/${userId}/keys`),
 }
 
+export const contactsApi = {
+    getContacts: () => api.get<Array<{ id: string; target_uid: string; status: string }>>('/contacts'),
+    updateContactStatus: (action: 'add' | 'block' | 'remove', targetUid: string) =>
+        api.post('/contacts/update', { action, target_uid: targetUid }),
+}
+
 export interface MessageEventData {
     event_type: string
-    payload: {
+    payload?: {
         encrypted_blob: string
         nonce: string
         sender_id: string
@@ -189,6 +201,17 @@ export interface MessageEventData {
         forward_info?: ForwardInfo
     }
     timestamp: number
+    message_id?: string
+    channel_id?: string | null
+    // New optional fields for other event types
+    user_id?: string
+    recipient_id?: string | null
+    emoji?: string
+    action?: string // "add" | "remove"
+    is_typing?: boolean
+    is_online?: boolean
+    mentioned_user_id?: string
+    sender_id?: string
 }
 
 export const subscribeToEvents = (onMessage: (msg: MessageEventData) => void) => {

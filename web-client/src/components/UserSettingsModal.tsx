@@ -439,7 +439,7 @@ export default function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                             )}
 
                             {activeTab === 'admin' && user.is_admin && (
-                                <AdminPanel />
+                                <AdminPanel compact={true} />
                             )}
                         </div>
                     </div>

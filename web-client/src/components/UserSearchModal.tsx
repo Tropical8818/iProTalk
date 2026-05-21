@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Search, MessageSquare, User } from 'lucide-react'
 import { usersApi } from '../api'
@@ -18,8 +18,48 @@ interface UserResult {
 export default function UserSearchModal({ onClose, onStartDM }: Props) {
     const [query, setQuery] = useState('')
     const [results, setResults] = useState<UserResult[]>([])
+    const [allUsers, setAllUsers] = useState<UserResult[]>([])
     const [loading, setLoading] = useState(false)
     const [searched, setSearched] = useState(false)
+
+    useEffect(() => {
+        const fetchAll = async () => {
+            setLoading(true)
+            try {
+                const res = await usersApi.getAllUsers()
+                setAllUsers(res.data)
+                setResults(res.data)
+            } catch (err) {
+                console.error("Failed to load all users in search", err)
+            } finally {
+                setLoading(false)
+            }
+        }
+        fetchAll()
+    }, [])
+
+    useEffect(() => {
+        if (!query.trim()) {
+            setResults(allUsers)
+            setSearched(false)
+            return
+        }
+
+        const delayDebounce = setTimeout(async () => {
+            setLoading(true)
+            setSearched(true)
+            try {
+                const res = await usersApi.searchUsers(query.trim())
+                setResults(res.data)
+            } catch {
+                setResults([])
+            } finally {
+                setLoading(false)
+            }
+        }, 300)
+
+        return () => clearTimeout(delayDebounce)
+    }, [query, allUsers])
 
     const handleSearch = async (e?: React.FormEvent) => {
         e?.preventDefault()

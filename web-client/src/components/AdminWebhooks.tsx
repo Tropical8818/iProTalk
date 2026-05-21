@@ -9,7 +9,11 @@ interface Channel {
     name: string;
 }
 
-export default function AdminWebhooks() {
+interface AdminWebhooksProps {
+    compact?: boolean;
+}
+
+export default function AdminWebhooks({ compact = false }: AdminWebhooksProps) {
     const { data: webhooks, isLoading } = useGetWebhooksQuery();
     const { data: channels } = useGetChannelsQuery({});
     const [createWebhook] = useCreateWebhookMutation();
@@ -75,7 +79,7 @@ export default function AdminWebhooks() {
                         exit={{ opacity: 0, height: 0 }}
                         className="bg-slate-800/50 border border-slate-700 rounded-2xl p-5 overflow-hidden"
                     >
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div className={`grid grid-cols-1 gap-4 mb-4 ${compact ? '' : 'md:grid-cols-2 gap-6 mb-6'}`}>
                             <div>
                                 <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Webhook Name</label>
                                 <input
@@ -155,7 +159,7 @@ export default function AdminWebhooks() {
                                 </button>
                             </div>
 
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 ml-16">
+                            <div className={`grid grid-cols-1 gap-3 ${compact ? 'ml-0' : 'lg:grid-cols-2 ml-16'}`}>
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Webhook URL</label>
                                     <div className="flex items-center gap-2 bg-slate-950/50 border border-slate-800 rounded-lg p-2 group/input">

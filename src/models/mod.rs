@@ -74,10 +74,12 @@ pub struct MessagePayload {
 pub enum RealtimeEvent {
     /// A new, edited, deleted, or forwarded message
     NewMessage {
+        message_id: String,
         payload: MessagePayload,
         timestamp: i64,
     },
     EditMessage {
+        message_id: String,
         payload: MessagePayload,
         timestamp: i64,
     },
@@ -86,6 +88,7 @@ pub enum RealtimeEvent {
         timestamp: i64,
     },
     DmMessage {
+        message_id: String,
         payload: MessagePayload,
         timestamp: i64,
     },
@@ -119,6 +122,30 @@ pub enum RealtimeEvent {
         channel_id: Option<String>,
         timestamp: i64,
     },
+    /// Message Pinned
+    PinMessage {
+        message_id: String,
+        channel_id: Option<String>,
+        timestamp: i64,
+    },
+    /// Message Unpinned
+    UnpinMessage {
+        message_id: String,
+        channel_id: Option<String>,
+        timestamp: i64,
+    },
+    /// Message Read Receipt
+    ReadReceipt {
+        user_id: String,
+        message_id: String,
+        channel_id: String,
+        timestamp: i64,
+    },
 }
 
-
+#[derive(Debug, Object, Serialize, Deserialize)]
+pub struct PushSubscriptionRequest {
+    pub endpoint: String,
+    pub p256dh: String, // Base64
+    pub auth: String,   // Base64
+}
